@@ -1,0 +1,54 @@
+# Fit Coach: PostgreSQL + one-shot migrations + bot.
+# The database port is NOT published. The app port binds to 127.0.0.1 only (for a
+# host reverse proxy in webhook mode); in polling mode nothing listens on it.
+name: fitcoach
+
+x-app: &app
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://fitcoach_app:${FITCOACH_APP_PASSWORD:?set in .env}@db:5432/fitcoach
+    MIGRATION_DATABASE_URL: postgresql+asyncpg://fitcoach_owner:${FITCOACH_OWNER_PASSWORD:?set in .env}@db:5432/fitcoach
+    APP_DB_ROLE: fitcoach_app
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fitcoach
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      FITCOACH_OWNER_PASSWORD: ${FITCOACH_OWNER_PASSWORD}
+      FITCOACH_APP_PASSWORD: ${FITCOACH_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d fitcoach"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: "no"
+
+  bot:
+    <<: *app
+    command: ["python", "-m", "fitcoach"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
