@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fitcoach.bot.ui import Rm, inline
 from fitcoach.i18n import Translator
+from fitcoach.logsafe import log_failure
 from fitcoach.services.diary import DiaryService
 from fitcoach.services.reminders import (
     DeliveryBlockedError,
@@ -66,6 +67,6 @@ async def reminder_loop(
             counts = await process_due(sessionmaker, send)
             if any(counts.values()):
                 log.info("reminders: %s", counts)
-        except Exception:  # never let the loop die; details stay in logs without content
-            log.exception("reminder tick failed")
+        except Exception as exc:  # never let the loop die
+            log_failure(log, "reminder tick failed", exc)
         await asyncio.sleep(interval)

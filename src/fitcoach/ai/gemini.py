@@ -1,7 +1,7 @@
 """Gemini REST adapter (v1beta generateContent, JSON Schema structured output).
 
-Live-verified on 2026-09-29 with gemini-3.5-flash-lite for text extraction and
-`responseJsonSchema` (see docs/STATUS.md). Model names come from configuration only.
+Live-verified on 2026-09-29 against gemini-3.5-flash-lite (text tasks) and the configured
+media model (image/audio), see docs/STATUS.md. Model names come from configuration only.
 """
 
 from __future__ import annotations
@@ -38,8 +38,45 @@ def load_prompt(name: str) -> str:
     return resources.files("fitcoach.prompts").joinpath(f"{name}.txt").read_text("utf-8")
 
 
+# Keywords the Gemini structured-output endpoint rejected or does not need (verified live:
+# `maxItems` causes HTTP 400). All limits are still enforced by Pydantic on the response.
+_DROP_KEYS = {
+    "title",
+    "default",
+    "additionalProperties",
+    "maxItems",
+    "minItems",
+    "pattern",
+    "$defs",
+}
+
+
+def _clean(node: Any, defs: dict[str, Any]) -> Any:
+    if isinstance(node, list):
+        return [_clean(x, defs) for x in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        return _clean(defs[node["$ref"].rsplit("/", 1)[-1]], defs)
+    if "anyOf" in node:
+        # Pydantic renders Decimal as number|string; the model should produce a number.
+        options = node["anyOf"]
+        types = [o.get("type") for o in options if isinstance(o, dict)]
+        if "number" in types and "string" in types:
+            number = next(o for o in options if o.get("type") == "number")
+            rest = [o for o in options if o.get("type") not in ("number", "string")]
+            node = {k: v for k, v in node.items() if k != "anyOf"}
+            if rest:
+                node["anyOf"] = [number, *rest]
+            else:
+                node.update(number)
+    return {k: _clean(v, defs) for k, v in node.items() if k not in _DROP_KEYS}
+
+
 def _schema(model: type[BaseModel]) -> dict[str, Any]:
-    return model.model_json_schema()
+    raw = model.model_json_schema()
+    cleaned: dict[str, Any] = _clean(raw, raw.get("$defs", {}))
+    return cleaned
 
 
 class GeminiProvider:

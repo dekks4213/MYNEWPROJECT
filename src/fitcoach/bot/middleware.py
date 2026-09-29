@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fitcoach.ai.types import AIUnavailableError
 from fitcoach.i18n import Translator
+from fitcoach.logsafe import log_failure
 from fitcoach.services.errors import ServiceError
 from fitcoach.services.users import resolve_user
 
@@ -64,9 +65,9 @@ class UnitOfWorkMiddleware(BaseMiddleware):
                 # Keep the update marked so a retry doesn't repeat side effects.
                 await self._mark_after_rollback(tg_user.id, event.update_id)
                 return None
-            except Exception:
+            except Exception as exc:
                 await session.rollback()
-                log.exception("unhandled error in handler")
+                log_failure(log, "unhandled error in handler", exc)
                 await _notify(event, tr("err.generic"))
                 return None
 

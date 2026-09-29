@@ -273,7 +273,7 @@ class AiCall(Owned, Base):
     task: Mapped[str] = mapped_column(String(32), nullable=False)
     provider: Mapped[str] = mapped_column(String(16), nullable=False)
     model: Mapped[str | None] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     media: Mapped[str] = mapped_column(String(8), nullable=False, server_default="none")

@@ -346,6 +346,9 @@ async def test_strong_import_export_and_delete(app: App) -> None:
     await onboard(u)
     await u.send("🏋️ Тренировки")
     await u.tap("Импорт из Strong")
+    assert "слишком большой" in joined(await u.send_document(b"x" * 3_000_001, "big.csv"))
+    assert "Не похоже на CSV" in joined(await u.send_document(b"MZ\x90\x00", "evil.exe"))
+    assert "Не похоже на CSV" in joined(await u.send_document(b"\x00\x01garbage", "a.csv"))
     out = joined(await u.send_document(STRONG_CSV.encode(), "strong.csv"))
     assert "Найдено тренировок: 2" in out and "Строк с ошибками: 2" in out
     assert "Импортировано тренировок: 2" in joined(await u.tap("Импортировать"))

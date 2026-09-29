@@ -163,6 +163,7 @@ def upgrade() -> None:
         "ai_calls", sa.Column("media", sa.String(length=8), server_default="none", nullable=False)
     )
     op.add_column("ai_calls", sa.Column("latency_ms", sa.Integer(), nullable=True))
+    op.alter_column("ai_calls", "status", type_=sa.String(length=32), existing_nullable=False)
     op.add_column(
         "ai_calls", sa.Column("refunded", sa.Boolean(), server_default="false", nullable=False)
     )
@@ -221,6 +222,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.alter_column("ai_calls", "status", type_=sa.String(length=16), existing_nullable=False)
     op.execute("DROP FUNCTION IF EXISTS app_due_reminders(timestamptz, integer)")
     op.execute("DROP INDEX IF EXISTS uq_workout_sessions_source_ref")
     for table, name, _expr in reversed(NEW_CHECKS):

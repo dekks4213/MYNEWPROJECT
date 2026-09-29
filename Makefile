@@ -1,4 +1,4 @@
-.PHONY: dev down logs migrate test test-db test-db-stop lint fmt
+.PHONY: dev down logs migrate test test-db test-db-stop lint fmt backup restore-check smoke
 
 TEST_DB_PORT ?= 55432
 export TEST_PG_ADMIN_URL ?= postgresql://postgres:test@127.0.0.1:$(TEST_DB_PORT)/postgres
@@ -34,3 +34,12 @@ lint:
 fmt:
 	uv run ruff format src tests migrations
 	uv run ruff check --fix src tests migrations
+
+backup:         ## pg_dump into ./backups (Windows: scripts/backup.ps1)
+	scripts/backup.sh
+
+restore-check:  ## restore a dump into a temporary DB and compare counts: make restore-check FILE=...
+	scripts/restore-check.sh $(FILE)
+
+smoke:          ## live Gemini smoke test (max 7 calls; needs GEMINI_API_KEY/GEMINI_MODEL)
+	uv run python scripts/smoke_gemini.py

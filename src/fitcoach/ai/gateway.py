@@ -287,7 +287,7 @@ class AIGateway:
                     task=task,
                     provider=provider.name,
                     model=result.model if result else getattr(provider, "model", None),
-                    status=status[:16],
+                    status=status[:32],
                     input_tokens=result.input_tokens if result else None,
                     output_tokens=result.output_tokens if result else None,
                     media=media.value,
