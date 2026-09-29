@@ -51,9 +51,16 @@ class DiaryService:
         protein_g: Decimal | None = None,
         fat_g: Decimal | None = None,
         carbs_g: Decimal | None = None,
+        fiber_g: Decimal | None = None,
         precision: Precision,
         source: str = "manual",
         draft_id: int | None = None,
+        meal_type: str | None = None,
+        amount: Decimal | None = None,
+        unit: str | None = None,
+        grams: Decimal | None = None,
+        nutrient_source: str | None = None,
+        food_id: int | None = None,
         now: dt.datetime | None = None,
     ) -> FoodEntry:
         name = " ".join(name.split())
@@ -71,9 +78,16 @@ class DiaryService:
             protein_g=protein_g,
             fat_g=fat_g,
             carbs_g=carbs_g,
+            fiber_g=fiber_g,
             precision=precision.value,
             source=source,
             draft_id=draft_id,
+            meal_type=meal_type,
+            amount=amount,
+            unit=unit,
+            grams=grams,
+            nutrient_source=nutrient_source,
+            food_id=food_id,
         )
         self.session.add(entry)
         await self.session.flush()

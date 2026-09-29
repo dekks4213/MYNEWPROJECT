@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fitcoach.ai.gateway import AIGateway
 from fitcoach.bot.ui import COMMON_TIMEZONES, Ob, column, inline, main_menu
 from fitcoach.db.models import User
-from fitcoach.i18n import Translator, all_labels
+from fitcoach.i18n import Translator
+from fitcoach.services.reminders import ReminderService
 from fitcoach.services.users import GOALS, UserService
 
 router = Router(name="onboarding")
@@ -48,7 +49,8 @@ def step_view(tr: Translator, step: str, mode: str, gateway: AIGateway):  # type
         if gateway.is_mock:
             status = tr("ob.ai_status_mock")
         return tr("ob.privacy", status=status), inline(
-            [(tr("ob.ai_allow"), Ob(mode=mode, action="ai", value="yes"))],
+            [(tr("ob.ai_allow_all"), Ob(mode=mode, action="ai", value="all"))],
+            [(tr("ob.ai_allow_text"), Ob(mode=mode, action="ai", value="text"))],
             [(tr("ob.ai_deny"), Ob(mode=mode, action="ai", value="no"))],
         )
     if step == "timezone":
@@ -116,9 +118,11 @@ async def on_choice(
             return
         await svc.confirm_adult()
     elif action == "ai":
-        await svc.set_ai_consent(value == "yes")
+        await svc.set_ai_consent(value in ("all", "text"))
+        await svc.set_media_consent(value == "all")
     elif action == "tz":
         await svc.set_timezone(value)
+        await ReminderService(session, user).reschedule_all()
     elif action == "units":
         await svc.set_units(value)
     elif action == "goal":
@@ -179,50 +183,3 @@ async def onboarding_other(
 @router.callback_query(lambda q, user: not_onboarded(user))
 async def onboarding_stray_callback(query: CallbackQuery, tr: Translator) -> None:
     await query.answer(tr("ob.finish_first"), show_alert=True)
-
-
-# --- settings (after onboarding) -------------------------------------------
-
-
-@router.message(Command("settings"))
-@router.message(F.text.in_(all_labels("menu.settings")))
-async def settings_menu(message: Message, user: User, tr: Translator, state: FSMContext) -> None:
-    await state.clear()
-    target = str(user.daily_kcal_target) if user.daily_kcal_target is not None else "—"
-    ai = tr("word.yes") if user.ai_text_consent_at else tr("word.no")
-    text = tr(
-        "settings.view", language=user.language, tz=user.timezone or "—", ai=ai, target=target
-    )
-    await message.answer(
-        text,
-        reply_markup=column(
-            [
-                (tr("settings.language"), Ob(mode="set", action="open", value="language")),
-                (tr("settings.timezone"), Ob(mode="set", action="open", value="timezone")),
-                (tr("settings.privacy"), Ob(mode="set", action="open", value="privacy")),
-                (tr("settings.target"), Ob(mode="set", action="open", value="target")),
-            ]
-        ),
-    )
-
-
-@router.message(SettingsSG.timezone, F.text)
-async def settings_timezone(
-    message: Message, session: AsyncSession, user: User, tr: Translator, state: FSMContext
-) -> None:
-    assert message.text is not None
-    await UserService(session, user).set_timezone(message.text)
-    await session.commit()
-    await state.clear()
-    await message.answer(tr("settings.saved"), reply_markup=main_menu(tr))
-
-
-@router.message(SettingsSG.target, F.text)
-async def settings_target(
-    message: Message, session: AsyncSession, user: User, tr: Translator, state: FSMContext
-) -> None:
-    assert message.text is not None
-    await UserService(session, user).set_kcal_target(message.text)
-    await session.commit()
-    await state.clear()
-    await message.answer(tr("settings.saved"), reply_markup=main_menu(tr))

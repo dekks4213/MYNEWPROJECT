@@ -10,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fitcoach.db.models import User
 from fitcoach.db.session import bind_identity
+from fitcoach.domain.nutrition import parse_macros
 from fitcoach.domain.units import ParseError, parse_decimal
 from fitcoach.services.errors import ServiceError
 
+MACRO_TARGET_MAX = Decimal(1000)
 ONBOARDING_STEPS = ("language", "age", "privacy", "timezone", "units", "goal", "target", "done")
 LANGUAGES = ("ru", "en")
 GOALS = ("maintain", "lose", "gain", "habits")
@@ -120,3 +122,34 @@ class UserService:
             self.user.target_set_at = now or utcnow()
         self._advance("target")
         return await self._flush()
+
+    async def set_targets(self, raw: str | None, now: dt.datetime | None = None) -> User:
+        """'2300; 180/80/230', '2300' or '; 180/80/230'. Manual targets only."""
+        if raw is None:
+            self.user.daily_kcal_target = None
+            self.user.protein_target_g = self.user.fat_target_g = self.user.carbs_target_g = None
+            self.user.target_set_at = None
+            await self.session.flush()
+            return self.user
+        kcal_text, _, macro_text = raw.partition(";")
+        if kcal_text.strip():
+            await self.set_kcal_target(kcal_text, now)
+        if macro_text.strip():
+            try:
+                p, f, c = parse_macros(macro_text)
+            except ParseError as exc:
+                raise ServiceError(exc.code) from exc
+            if any(v is not None and v > MACRO_TARGET_MAX for v in (p, f, c)):
+                raise ServiceError("target_out_of_range")
+            self.user.protein_target_g, self.user.fat_target_g = p, f
+            self.user.carbs_target_g = c
+            self.user.target_set_at = now or utcnow()
+        if not kcal_text.strip() and not macro_text.strip():
+            raise ServiceError("not_a_number")
+        await self.session.flush()
+        return self.user
+
+    async def set_media_consent(self, allowed: bool, now: dt.datetime | None = None) -> User:
+        self.user.ai_media_consent_at = (now or utcnow()) if allowed else None
+        await self.session.flush()
+        return self.user

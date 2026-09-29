@@ -18,7 +18,8 @@ class Precision(StrEnum):
     """How the user obtained the numbers. Shown to the user; never a confidence score."""
 
     MEASURED = "measured"  # weighed or taken from a label
-    APPROXIMATE = "approximate"
+    RECIPE = "recipe"  # computed from a saved recipe
+    APPROXIMATE = "approximate"  # estimated amount and/or reference values
     UNKNOWN = "unknown"  # no nutrient numbers at all
 
 

@@ -18,6 +18,7 @@ from fitcoach.db.models import (
     ActivityType,
     ActivityTypeVersion,
     PlannedWorkout,
+    Program,
     User,
     WorkoutSession,
     WorkoutTemplate,
@@ -31,6 +32,7 @@ from fitcoach.domain.fields import (
     parse_field_value,
 )
 from fitcoach.domain.units import ParseError
+from fitcoach.domain.workout import ActivityKind, WorkoutBody
 from fitcoach.services.errors import Conflict, NotFound, ServiceError
 from fitcoach.services.users import local_today, utcnow
 
@@ -38,6 +40,7 @@ MAX_NAME_LEN = 60
 MAX_TYPES_PER_USER = 100
 MAX_TEMPLATES_PER_USER = 200
 MAX_PLAN_DAYS_AHEAD = 366
+MAX_PROGRAMS = 30
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,8 @@ class RecordingContext:
     template_name: str | None
     targets: dict[str, JsonValue]
     planned_workout_id: int | None
+    target_blocks: tuple[dict[str, Any], ...] = ()
+    kind: str = "custom"
 
 
 def _clean_name(name: str) -> str:
@@ -78,7 +83,12 @@ class ActivityService:
 
     # --- activity types -------------------------------------------------
 
-    async def create_type(self, name: str, fields: list[FieldDefinition]) -> ActivityTypeVersion:
+    async def create_type(
+        self,
+        name: str,
+        fields: list[FieldDefinition],
+        kind: ActivityKind = ActivityKind.CUSTOM,
+    ) -> ActivityTypeVersion:
         name = _clean_name(name)
         schema = _schema(fields)
         if schema.get(DURATION_KEY) is None:
@@ -86,7 +96,14 @@ class ActivityService:
         count = len(await self.list_types(include_archived=True))
         if count >= MAX_TYPES_PER_USER:
             raise ServiceError("limit_reached")
-        activity = ActivityType(owner_id=self.user.id, name=name, current_version=1)
+        activity = ActivityType(
+            owner_id=self.user.id,
+            name=name,
+            current_version=1,
+            kind=kind.value,
+            # A motorcycle ride is logged, but never counted as human training effort.
+            counts_as_training=kind is not ActivityKind.MOTO_RIDE,
+        )
         self.session.add(activity)
         await self.session.flush()
         version = ActivityTypeVersion(
@@ -173,15 +190,27 @@ class ActivityService:
         return targets
 
     async def create_template(
-        self, type_id: int, name: str, raw_targets: dict[str, str] | None = None
+        self,
+        type_id: int,
+        name: str,
+        raw_targets: dict[str, str] | None = None,
+        *,
+        blocks: WorkoutBody | None = None,
+        program_id: int | None = None,
     ) -> WorkoutTemplateVersion:
         name = _clean_name(name)
         type_version = await self.current_type_version(type_id)
+        if program_id is not None:
+            await self.get_program(program_id)
         targets = self._validate_targets(_schema(type_version.fields), raw_targets or {})
         if len(await self.list_templates(include_archived=True)) >= MAX_TEMPLATES_PER_USER:
             raise ServiceError("limit_reached")
         template = WorkoutTemplate(
-            owner_id=self.user.id, activity_type_id=type_id, name=name, current_version=1
+            owner_id=self.user.id,
+            activity_type_id=type_id,
+            name=name,
+            current_version=1,
+            program_id=program_id,
         )
         self.session.add(template)
         await self.session.flush()
@@ -192,6 +221,7 @@ class ActivityService:
             name=name,
             activity_type_version_id=type_version.id,
             targets=targets,
+            blocks=blocks.dump() if blocks else [],
         )
         self.session.add(version)
         await self.session.flush()
@@ -204,11 +234,13 @@ class ActivityService:
         *,
         expected_version: int,
         name: str | None = None,
+        blocks: WorkoutBody | None = None,
     ) -> WorkoutTemplateVersion:
         """New immutable revision bound to the type's current version; old sessions keep theirs."""
         template = await self.get_template(template_id)
         if template.current_version != expected_version:
             raise Conflict
+        previous = await self.current_template_version(template_id)
         type_version = await self.current_type_version(template.activity_type_id)
         targets = self._validate_targets(_schema(type_version.fields), raw_targets)
         new_name = _clean_name(name) if name is not None else template.name
@@ -236,6 +268,7 @@ class ActivityService:
             name=new_name,
             activity_type_version_id=type_version.id,
             targets=targets,
+            blocks=blocks.dump() if blocks is not None else list(previous.blocks),
         )
         self.session.add(version)
         await self.session.flush()
@@ -364,8 +397,11 @@ class ActivityService:
         if sum(x is not None for x in (type_id, template_id, planned_id)) != 1:
             raise ValueError("exactly one source required")
         if type_id is not None:
+            activity = await self.get_type(type_id)
             tv = await self.current_type_version(type_id)
-            return RecordingContext(tv.id, tv.name, _schema(tv.fields), None, None, {}, None)
+            return RecordingContext(
+                tv.id, tv.name, _schema(tv.fields), None, None, {}, None, (), activity.kind
+            )
         if planned_id is not None:
             planned = await self.get_planned(planned_id)
             if planned.status != "planned":
@@ -375,8 +411,17 @@ class ActivityService:
             assert template_id is not None
             wv = await self.current_template_version(template_id)
         tv = await self._type_version(wv.activity_type_version_id)
+        activity = await self.get_type(tv.activity_type_id)
         return RecordingContext(
-            tv.id, tv.name, _schema(tv.fields), wv.id, wv.name, dict(wv.targets), planned_id
+            tv.id,
+            tv.name,
+            _schema(tv.fields),
+            wv.id,
+            wv.name,
+            dict(wv.targets),
+            planned_id,
+            tuple(wv.blocks),
+            activity.kind,
         )
 
     async def record_session(
@@ -384,6 +429,11 @@ class ActivityService:
         ctx: RecordingContext,
         raw_values: dict[str, str],
         now: dt.datetime | None = None,
+        *,
+        blocks: WorkoutBody | None = None,
+        source: str = "manual",
+        source_ref: str | None = None,
+        notes: str | None = None,
     ) -> WorkoutSession:
         """Persist *performed* values only. Targets are never copied in as results."""
         # Re-resolve ownership server-side: the context may come from client-side state.
@@ -407,8 +457,10 @@ class ActivityService:
         missing = [f.key for f in schema.fields if f.required and values.get(f.key) is None]
         if missing:
             raise ServiceError("missing_required")
-        if not values:
+        if not values and not (blocks and blocks.blocks):
             raise ServiceError("empty_session")
+        if notes is not None and len(notes) > 500:
+            raise ServiceError("too_long")
 
         now = now or utcnow()
         session = WorkoutSession(
@@ -422,6 +474,10 @@ class ActivityService:
             field_snapshot=list(tv.fields),
             values=values,
             raw_values=raws,
+            blocks=blocks.dump() if blocks else [],
+            source=source,
+            source_ref=source_ref,
+            notes=notes,
         )
         self.session.add(session)
         await self.session.flush()
@@ -443,3 +499,101 @@ class ActivityService:
             if result.rowcount != 1:  # type: ignore[attr-defined]
                 raise Conflict("already_done")
         return session
+
+    # --- programs ---------------------------------------------------------------
+
+    async def create_program(self, name: str) -> Program:
+        name = _clean_name(name)
+        count = len(
+            (
+                await self.session.execute(
+                    select(Program.id).where(Program.owner_id == self.user.id)
+                )
+            ).all()
+        )
+        if count >= MAX_PROGRAMS:
+            raise ServiceError("limit_reached")
+        program = Program(owner_id=self.user.id, name=name)
+        self.session.add(program)
+        await self.session.flush()
+        return program
+
+    async def get_program(self, program_id: int) -> Program:
+        row = (
+            await self.session.execute(
+                select(Program).where(
+                    Program.id == program_id,
+                    Program.owner_id == self.user.id,
+                    Program.archived_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise NotFound
+        return row
+
+    async def list_programs(self) -> list[Program]:
+        query = select(Program).where(
+            Program.owner_id == self.user.id, Program.archived_at.is_(None)
+        )
+        return list((await self.session.execute(query.order_by(Program.id))).scalars())
+
+    async def program_templates(self, program_id: int) -> list[WorkoutTemplate]:
+        await self.get_program(program_id)
+        query = select(WorkoutTemplate).where(
+            WorkoutTemplate.owner_id == self.user.id,
+            WorkoutTemplate.program_id == program_id,
+            WorkoutTemplate.archived_at.is_(None),
+        )
+        return list((await self.session.execute(query.order_by(WorkoutTemplate.id))).scalars())
+
+    async def assign_template(self, template_id: int, program_id: int | None) -> WorkoutTemplate:
+        template = await self.get_template(template_id)
+        if program_id is not None:
+            await self.get_program(program_id)
+        template.program_id = program_id
+        await self.session.flush()
+        return template
+
+    async def archive_program(self, program_id: int) -> None:
+        program = await self.get_program(program_id)
+        program.archived_at = utcnow()
+        await self.session.flush()
+
+    async def plan_weekdays(
+        self, template_id: int, weekdays: set[int], weeks: int = 4
+    ) -> list[PlannedWorkout]:
+        """Plan a template on given weekdays (0=Monday) for the next `weeks` weeks.
+
+        Existing open plans for the same template and date are not duplicated.
+        """
+        if not weekdays or not weekdays <= set(range(7)) or not 1 <= weeks <= 12:
+            raise ServiceError("bad_date")
+        today = local_today(self.user)
+        await self.get_template(template_id)
+        existing = {
+            p.planned_date
+            for p, v in await self.list_planned(today, today + dt.timedelta(weeks=weeks))
+            if v.template_id == template_id
+        }
+        created = []
+        for offset in range(weeks * 7):
+            day = today + dt.timedelta(days=offset)
+            if day.weekday() in weekdays and day not in existing:
+                created.append(await self.plan(template_id, day))
+        return created
+
+    async def list_sessions(
+        self, *, since: dt.date | None = None, limit: int = 20
+    ) -> list[WorkoutSession]:
+        query = select(WorkoutSession).where(
+            WorkoutSession.owner_id == self.user.id, WorkoutSession.deleted_at.is_(None)
+        )
+        if since is not None:
+            query = query.where(WorkoutSession.local_date >= since)
+        query = query.order_by(WorkoutSession.completed_at.desc()).limit(limit)
+        return list((await self.session.execute(query)).scalars())
+
+    async def type_of_version(self, version_id: int) -> ActivityType:
+        tv = await self._type_version(version_id)
+        return await self.get_type(tv.activity_type_id)

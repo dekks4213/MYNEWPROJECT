@@ -8,18 +8,28 @@ from typing import Any
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, SendMessage, TelegramMethod
-from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, Update, User
+from aiogram.methods import AnswerCallbackQuery, GetFile, SendMessage, TelegramMethod
+from aiogram.types import (
+    CallbackQuery,
+    Chat,
+    Document,
+    File,
+    InlineKeyboardMarkup,
+    Message,
+    PhotoSize,
+    Update,
+    User,
+    Voice,
+)
 
 _update_ids = itertools.count(1_000_000)
 
 
 def detach_routers() -> None:
     """Routers attach to one Dispatcher per process; emulate a fresh process in tests."""
-    from fitcoach.bot.app import fallback
-    from fitcoach.bot.handlers import activities, diary, onboarding
+    from fitcoach.bot.app import ROUTERS
 
-    for router in (onboarding.router, diary.router, activities.router, fallback):
+    for router in ROUTERS:
         router._parent_router = None
 
 
@@ -30,6 +40,7 @@ class RecordingSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list[TelegramMethod[Any]] = []
+        self.files: dict[str, bytes] = {}
 
     async def make_request(
         self,
@@ -38,17 +49,27 @@ class RecordingSession(BaseSession):
         timeout: int | None = None,  # noqa: ASYNC109
     ) -> Any:
         self.requests.append(method)
-        if isinstance(method, SendMessage):
+        if isinstance(method, GetFile):
+            data = self.files[method.file_id]
+            return File(
+                file_id=method.file_id,
+                file_unique_id="u" + method.file_id,
+                file_size=len(data),
+                file_path=f"files/{method.file_id}",
+            )
+        if getattr(type(method), "__returning__", None) is Message:
+            chat_id = int(getattr(method, "chat_id", 0))
             return Message(
                 message_id=next(_message_ids),
                 date=dt.datetime.now(dt.UTC),
-                chat=Chat(id=int(method.chat_id), type="private"),
-                text=method.text,
+                chat=Chat(id=chat_id, type="private"),
+                text=getattr(method, "text", None),
             )
         return True
 
-    async def stream_content(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover
-        raise NotImplementedError
+    async def stream_content(self, url: str, *args: Any, **kwargs: Any) -> Any:
+        file_id = url.rsplit("/", 1)[-1]
+        yield self.files[file_id]
 
     async def close(self) -> None:
         pass
@@ -87,6 +108,60 @@ class TgUser:
     async def send(self, text: str, update_id: int | None = None) -> list[str]:
         uid = update_id if update_id is not None else next(_update_ids)
         return await self._feed(Update(update_id=uid, message=self._message(text)))
+
+    async def send_photo(self, data: bytes, caption: str | None = None) -> list[str]:
+        file_id = f"photo{next(_message_ids)}"
+        self.session.files[file_id] = data
+        message = self._message(None).model_copy(
+            update={
+                "photo": [
+                    PhotoSize(
+                        file_id=file_id,
+                        file_unique_id="u" + file_id,
+                        width=640,
+                        height=480,
+                        file_size=len(data),
+                    )
+                ],
+                "caption": caption,
+            }
+        )
+        return await self._feed(Update(update_id=next(_update_ids), message=message))
+
+    async def send_voice(self, data: bytes, duration: int = 5) -> list[str]:
+        file_id = f"voice{next(_message_ids)}"
+        self.session.files[file_id] = data
+        message = self._message(None).model_copy(
+            update={
+                "voice": Voice(
+                    file_id=file_id,
+                    file_unique_id="u" + file_id,
+                    duration=duration,
+                    file_size=len(data),
+                )
+            }
+        )
+        return await self._feed(Update(update_id=next(_update_ids), message=message))
+
+    async def send_document(self, data: bytes, name: str) -> list[str]:
+        file_id = f"doc{next(_message_ids)}"
+        self.session.files[file_id] = data
+        message = self._message(None).model_copy(
+            update={
+                "document": Document(
+                    file_id=file_id,
+                    file_unique_id="u" + file_id,
+                    file_name=name,
+                    file_size=len(data),
+                )
+            }
+        )
+        return await self._feed(Update(update_id=next(_update_ids), message=message))
+
+    def sent_documents(self) -> list[Any]:
+        from aiogram.methods import SendDocument
+
+        return [r for r in self.session.requests if isinstance(r, SendDocument)]
 
     async def press(self, data: str) -> list[str]:
         query = CallbackQuery(

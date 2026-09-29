@@ -208,7 +208,7 @@ async def test_migrations_downgrade_and_reapply_on_existing_database(
         await asyncio.to_thread(migrate, url, "base", True)
         await asyncio.to_thread(migrate, url, "head")
         conn = await asyncpg.connect(url.replace("+asyncpg", ""))
-        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0001"
+        assert await conn.fetchval("SELECT version_num FROM alembic_version") == "0002"
         assert await conn.fetchval(
             "SELECT has_table_privilege($1, 'food_entries', 'SELECT')", APP_ROLE
         )

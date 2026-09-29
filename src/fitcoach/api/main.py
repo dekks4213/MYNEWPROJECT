@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from collections.abc import AsyncIterator
@@ -13,8 +14,9 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from fitcoach.ai.gateway import build_gateway
+from fitcoach.ai.gateway import build_gateway, verify_provider
 from fitcoach.bot.app import build_bot, build_dispatcher
+from fitcoach.bot.scheduler import reminder_loop
 from fitcoach.config import Settings, get_settings
 from fitcoach.db.session import create_engine, create_sessionmaker
 
@@ -34,12 +36,18 @@ def create_app(
     settings = settings or get_settings()
     engine = create_engine(settings.database_url, settings.db_pool_size)
     sessionmaker = create_sessionmaker(engine)
-    dp = dp or build_dispatcher(sessionmaker, build_gateway(settings), settings)
+    gateway = build_gateway(settings)
+    dp = dp or build_dispatcher(sessionmaker, gateway, settings)
     bot_ref: dict[str, Bot] = {}
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         bot_ref["bot"] = bot or build_bot(settings)
+        jobs = []
+        if bot is None:
+            log.info(await verify_provider(gateway))
+            if settings.reminders_enabled:
+                jobs.append(asyncio.create_task(reminder_loop(bot_ref["bot"], sessionmaker)))
         if settings.bot_mode == "webhook" and bot is None and settings.webhook_base_url:
             assert settings.webhook_secret is not None
             await bot_ref["bot"].set_webhook(
@@ -48,6 +56,8 @@ def create_app(
                 drop_pending_updates=False,
             )
         yield
+        for job in jobs:
+            job.cancel()
         if bot is None:
             await bot_ref["bot"].session.close()
         await engine.dispose()

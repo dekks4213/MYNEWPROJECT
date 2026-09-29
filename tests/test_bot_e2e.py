@@ -1,29 +1,33 @@
-"""P0 acceptance flow through the real Dispatcher, middleware, services and PostgreSQL.
+"""Acceptance flows through the real Dispatcher, middleware, services and PostgreSQL.
 
-Telegram itself is replaced by a recording session: this is an integration test,
-not a live Telegram verification.
+Telegram itself is replaced by a recording session: these are integration tests, not a live
+Telegram verification. AI uses the deterministic mock provider or a scripted provider.
 """
 
 from __future__ import annotations
 
+import io
+import json
 from collections.abc import AsyncIterator
 
 import pytest
 from aiogram import Bot
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fitcoach.ai.gateway import AIGateway
 from fitcoach.ai.mock import MockProvider
 from fitcoach.bot.app import build_dispatcher
-from fitcoach.bot.ui import Ac, En
+from fitcoach.bot.ui import Ac, En, Fm, Fr
 from fitcoach.config import Settings
-from fitcoach.db.models import FoodEntry
+from fitcoach.db.models import FoodEntry, WorkoutSession
 from fitcoach.db.session import create_engine, create_sessionmaker
 from fitcoach.services.activities import ActivityService
 from fitcoach.services.users import resolve_user
 from tests.bot_harness import RecordingSession, TgUser, detach_routers
 from tests.conftest import new_telegram_id, requires_db
+from tests.test_p1_services import STRONG_CSV
 
 pytestmark = requires_db
 
@@ -41,7 +45,7 @@ class App:
         detach_routers()
         self.engine = create_engine(self.app_url, pool_size=2)
         self.sm: async_sessionmaker[AsyncSession] = create_sessionmaker(self.engine)
-        self.dp = build_dispatcher(self.sm, self.gateway, Settings())
+        self.dp = build_dispatcher(self.sm, self.gateway, Settings(), food_sources=[])
 
     async def restart(self) -> None:
         await self.engine.dispose()
@@ -58,19 +62,28 @@ async def app(database: dict[str, str]) -> AsyncIterator[App]:
     await instance.engine.dispose()
 
 
-async def onboard(u: TgUser, tz_text: str | None, target: str | None) -> None:
+@pytest.fixture
+async def ai_app(database: dict[str, str]) -> AsyncIterator[App]:
+    instance = App(database["app_url"], AIGateway(MockProvider(), Settings(ai_provider="mock")))
+    yield instance
+    await instance.engine.dispose()
+
+
+async def onboard(
+    u: TgUser, tz_text: str | None = None, target: str | None = None, ai: str = "Без ИИ"
+) -> None:
     out = await u.send("/start")
-    assert any("Выберите язык" in t for t in out)
+    assert any("РИТМ" in t for t in out)
     await u.tap("Русский")
     await u.tap("Мне 18 или больше")
-    out = await u.tap("Без ИИ")
+    out = await u.tap(ai)
     assert any("часовой пояс" in t for t in out)
     if tz_text:
         await u.send(tz_text)
     else:
         await u.tap("UTC")
     await u.tap("Метрическая")
-    await u.tap("Просто наладить привычки")
+    await u.tap("Наладить привычки")
     out = await u.send(target) if target else await u.tap("Без цели")
     assert any("Готово" in t for t in out)
 
@@ -83,95 +96,111 @@ async def test_p0_acceptance_two_users_restart_and_isolation(app: App) -> None:
     a, b = app.user(new_telegram_id()), app.user(new_telegram_id())
 
     # Features are gated until onboarding is finished; progress is resumable.
-    out = await a.send("🍽 Еда")
-    assert "Выберите язык" in joined(out)
+    assert "Выберите язык" in joined(await a.send("🍽 Записать еду"))
     await onboard(a, "Europe/Moscow", "2000")
-    await onboard(b, None, None)
+    await onboard(b)
 
-    # A: food (one-line manual form), weight.
-    await a.send("🍽 Еда")
-    await a.send("Овсянка; 350; 12/6/50")
-    out = await a.tap("взвешено")
-    assert "Записано: Овсянка — 350 ккал" in joined(out)
-    await a.send("⚖️ Вес")
-    assert "72.4 кг" in joined(await a.send("72,4"))
-    await a.send("⚖️ Вес")
+    # A: own label product, then a text entry resolved deterministically (no AI).
+    await a.send("🍽 Записать еду")
+    await a.tap("Мой продукт")
+    assert "добавлен" in joined(await a.send("Овсянка; 370; 13/7/60"))
+    await a.send("🍽 Записать еду")
+    await a.tap("Текстом")
+    out = joined(await a.send("овсянка 100 г, банан"))
+    assert "1. овсянка · 100 г · 370 ккал" in out and "взвешено/этикетка" in out
+    assert "2. банан · количество? · ккал неизвестны" in out
+    await a.tap("✏️ 2.")
+    out = joined(await a.send("105 ккал"))
+    assert "Итого: 475 ккал" in out
+    assert "Записано позиций: 2, 475 ккал" in joined(await a.tap("✅ Сохранить"))
+
+    # A: weight with decimal comma; invalid input is rejected with a clear message.
+    await a.send("📅 Мой день")
+    await a.tap("⚖️ Вес")
+    assert "72,4 кг" in joined(await a.send("72,4"))
+    await a.send("/weight")
     assert "Вес должен быть" in joined(await a.send("7"))
     await a.send("/cancel")
 
     # A: custom activity with duration + one custom numeric field, no migration involved.
-    await a.send("🏃 Тренировки")
-    await a.tap("Новый вид активности")
+    await a.send("🏋️ Тренировки")
+    await a.tap("Создать тренировку")
+    await a.tap("Свой вид")
     await a.send("Эндуро")
     await a.tap("Добавить поле")
     await a.send("Круги")
     await a.tap("Целое число")
-    out = await a.send("кр")
-    assert "Круги — Целое число, кр" in joined(out)
+    assert "Круги — Целое число, кр" in joined(await a.send("кр"))
     assert "создан" in joined(await a.tap("Сохранить вид"))
 
-    # A: template with targets, then plan it for today.
+    # A: template with targets, planned for today.
     await a.tap("Новый шаблон")
     await a.send("Трасса")
+    await a.tap("Пропустить")  # no block plan
     await a.send("60")  # planned duration
-    out = await a.send("10")  # planned laps
-    assert "Круги: 10 кр" in joined(out)
+    assert "Круги: 10 кр" in joined(await a.send("10"))
     assert "сохранён" in joined(await a.tap("Сохранить"))
-    await a.tap("Запланировать на сегодня")
+    await a.tap("На сегодня")
 
-    out = await a.send("📊 Сегодня")
-    summary = joined(out)
-    assert "Энергия: 350 ккал" in summary
-    assert "осталось 1650" in summary
-    assert "Тренировок сегодня не записано" in summary  # a plan is not completed work
-    assert "Дальше по плану: Трасса (сегодня)" in summary
+    summary = joined(await a.send("📅 Мой день"))
+    assert "475 / 2 000 ккал" in summary
+    assert "✓" not in summary  # a plan is not completed work
+    assert "По плану: Трасса" in summary
 
     # A: record the planned workout with actual values only.
-    await a.send("🏃 Тренировки")
-    await a.tap("Записать выполненную")
-    out = await a.tap("📅 Трасса")
-    assert "План: 1:00" in joined(out)
-    out = await a.send("1:30")  # h:mm field -> 90 minutes
-    assert "План: 10 кр" in joined(out)
+    await a.send("🏋️ Тренировки")
+    await a.tap("Начать тренировку")
+    assert "План: 1:00" in joined(await a.tap("📅 Трасса"))
+    assert "План: 10 кр" in joined(await a.send("1:30"))
     await a.tap("Пропустить")
     assert "Тренировка записана" in joined(await a.tap("Сохранить"))
     assert "неактуальна" in joined(await a.press(a.button("Сохранить")))  # double tap
 
-    out = await a.send("📊 Сегодня")
-    assert "Трасса: Длительность: 1:30" in joined(out)
-    assert "Круги" not in joined(out)  # skipped value is unknown, not a copied target
+    summary = joined(await a.send("📅 Мой день"))
+    assert "✓ Эндуро — Трасса · 90 мин" in summary
+    assert "По плану" not in summary
 
     # B cannot see or act on A's records, even with forged callback data.
     async with app.sm() as s:
         ua = await resolve_user(s, a.id)
         a_template = (await ActivityService(s, ua).list_templates())[0].id
         a_food = (await s.execute(select(FoodEntry.id))).scalars().first()
-    assert a_food is not None
-    out = await b.press(Ac(action="rec_tpl", id=a_template).pack())
-    assert "Запись не найдена" in joined(out)
-    out = await b.press(En(action="del", kind="food", id=a_food).pack())
-    assert "Запись не найдена" in joined(out)
-    out = await b.send("📊 Сегодня")
-    assert "записей пока нет" in joined(out)
-    assert "Трасса" not in joined(out)
+        a_draft = (await s.execute(select(FoodEntry.draft_id))).scalars().first()
+    assert a_food is not None and a_draft is not None
+    for forged in (
+        Ac(action="rec_tpl", id=a_template),
+        En(action="del", kind="food", id=a_food),
+        Fr(a="ok", d=a_draft, v=1),
+        Fr(a="edit", d=a_draft, v=1),
+        Fm(a="meal", id=a_template),
+        Ac(action="tpl", id=a_template),
+    ):
+        out = joined(await b.press(forged.pack()))
+        assert "не найдена" in out or "уже обработан" in out, forged
+    out = joined(await b.send("📅 Мой день"))
+    assert "Пока ничего не записано" in out and "Трасса" not in out
 
     # Restart the "service": data persists and stays separated.
     await app.restart()
     a, b = app.user(a.id), app.user(b.id)
-    summary_a = joined(await a.send("📊 Сегодня"))
-    assert "Энергия: 350 ккал" in summary_a and "Трасса" in summary_a
-    assert "72.4" in summary_a
-    summary_b = joined(await b.send("📊 Сегодня"))
-    assert "записей пока нет" in summary_b and "72.4" not in summary_b
+    summary_a = joined(await a.send("📅 Мой день"))
+    assert "475 / 2 000 ккал" in summary_a and "Трасса" in summary_a
+    assert "72,4 кг" in summary_a
+    summary_b = joined(await b.send("📅 Мой день"))
+    assert "Пока ничего не записано" in summary_b and "72,4" not in summary_b
 
 
 async def test_duplicate_update_is_processed_once(app: App) -> None:
     u = app.user(new_telegram_id())
-    await onboard(u, None, None)
-    await u.send("🍽 Еда")
-    await u.send("Чай; ?", update_id=990_000_000 + u.id % 1_000_000)
-    again = await u.send("Чай; ?", update_id=990_000_000 + u.id % 1_000_000)
-    assert again == []
+    await onboard(u)
+    await u.send("🍽 Записать еду")
+    await u.tap("Текстом")
+    update_id = 990_000_000 + u.id % 1_000_000
+    await u.send("чай 200 мл", update_id=update_id)
+    assert await u.send("чай 200 мл", update_id=update_id) == []
+    confirm = u.button("✅ Сохранить")
+    await u.press(confirm)
+    await u.press(confirm)
     async with app.sm() as s:
         user = await resolve_user(s, u.id)
         count = (
@@ -180,74 +209,198 @@ async def test_duplicate_update_is_processed_once(app: App) -> None:
     assert count == 1
 
 
-async def test_manual_corrections_and_undo(app: App) -> None:
+async def test_corrections_undo_and_draft_editing(app: App) -> None:
     u = app.user(new_telegram_id())
-    await onboard(u, None, "1800")
-    await u.send("🍽 Еда")
-    await u.send("Суп")
-    await u.tap("Не знаю")
-    out = await u.tap("Пропустить")
-    assert "Суп — ккал неизвестны (без данных)" in joined(out)
-    await u.send("✏️ Исправить")
+    await onboard(u, target="1800")
+    await u.send("🍽 Записать еду")
+    await u.tap("Текстом")
+    await u.send("суп 300 г, хлеб")
+    await u.tap("❌")  # remove "суп"
+    await u.tap("➕ Добавить")
+    out = joined(await u.send("салат 150 г"))
+    assert "1. хлеб" in out and "2. салат" in out and "суп" not in out
+    out = joined(await u.tap("🍽 "))  # cycle meal type
+    assert "Приём пищи:" in out
+    await u.tap("✅ Сохранить")
+    await u.send("/fix")
     await u.tap("✏️ 1")
-    out = await u.send("abc")
-    assert "Нужно число" in joined(out)
-    out = await u.send("210")
-    assert "Исправлено: Суп — 210 ккал" in joined(out)
-    await u.send("✏️ Исправить")
-    await u.tap("🗑 1")
-    assert "записей пока нет" in joined(await u.send("📊 Сегодня"))
+    assert "Нужно число" in joined(await u.send("abc"))
+    assert "Исправлено: хлеб — 210 ккал" in joined(await u.send("210"))
+    await u.send("/fix")
+    await u.tap("🗑 2")
     await u.tap("Восстановить")
-    assert "Энергия: 210 ккал" in joined(await u.send("📊 Сегодня"))
+    out = joined(await u.send("📅 Мой день"))
+    assert "210 / 1 800 ккал" in out and "Ещё записей без калорий: 1" in out
 
 
-async def test_ai_draft_flow_with_mock_is_labelled_and_needs_confirmation(
-    database: dict[str, str],
-) -> None:
-    app = App(database["app_url"], AIGateway(MockProvider(), Settings(ai_provider="mock")))
-    try:
-        u = app.user(new_telegram_id())
-        await u.send("/start")
-        await u.tap("Русский")
-        await u.tap("Мне 18 или больше")
-        await u.tap("Разрешить ИИ")
-        await u.tap("UTC")
-        await u.tap("Метрическая")
-        await u.tap("Пропустить")
-        await u.tap("Без цели")
-        await u.send("🍽 Еда")
-        await u.tap("Описать свободным текстом")
-        out = joined(await u.send("гречка и котлета"))
-        assert "Черновик" in out and "Тестовый режим ИИ" in out
-        assert "записей пока нет" in joined(await u.send("📊 Сегодня"))  # not saved yet
-        confirm = u.button("Сохранить")
-        assert "Сохранено записей: 2" in joined(await u.press(confirm))
-        assert "уже обработан" in joined(await u.press(confirm))
-        assert "записей — 2" in joined(await u.send("📊 Сегодня"))
-    finally:
-        await app.engine.dispose()
+async def test_ai_text_photo_voice_flows_are_drafts(ai_app: App) -> None:
+    u = ai_app.user(new_telegram_id())
+    await onboard(u, ai="ИИ для текста, фото и голоса")
+    await u.send("🍽 Записать еду")
+    await u.tap("Текстом")
+    out = joined(await u.send("гречка 200 г и котлета"))
+    assert "Черновик" in out and "Тестовый режим ИИ" in out
+    assert "Пока ничего не записано" in joined(await u.send("📅 Мой день"))  # not saved yet
+    await u.tap("⭐ Сохранить как блюдо")
+    assert "сохранено" in joined(await u.send("Обед на работе"))
+    confirm = u.button("✅ Сохранить")
+    assert "Записано позиций: 2" in joined(await u.press(confirm))
+    assert "уже обработан" in joined(await u.press(confirm))
+
+    img = io.BytesIO()
+    Image.new("RGB", (64, 64), (10, 200, 10)).save(img, format="JPEG")
+    out = joined(await u.send_photo(img.getvalue(), caption="обед"))
+    assert "Смотрю на фото" in out and "mock: блюдо на фото" in out and "количество?" in out
+    assert "не удалось прочитать" in joined(await u.send_photo(b"not an image")).lower()
+
+    out = joined(await u.send_voice(b"OggS" + b"\x00" * 100))
+    assert "Распознано: «гречка 200 г и котлета»" in out
+    assert "слишком" in joined(await u.send_voice(b"OggS", duration=600)).lower()
+
+    await u.send("🍽 Записать еду")
+    await u.tap("Мои блюда")
+    out = joined(await u.tap("Обед на работе"))
+    assert "1. гречка" in out and "2. котлета" in out
 
 
-async def test_manual_mode_without_ai_has_no_ai_button(app: App) -> None:
+async def test_media_without_ai_or_consent(app: App, ai_app: App) -> None:
     u = app.user(new_telegram_id())
-    await onboard(u, None, None)
-    await u.send("🍽 Еда")
+    await onboard(u)
+    await u.send("🍽 Записать еду")
     with pytest.raises(AssertionError):
-        u.button("свободным текстом")
-    out = await u.send("🍽 Еда")
-    assert "Что вы съели" in joined(out)
+        u.button("📷 Фото")  # unfinished/unavailable entries are not shown
+    assert "только с ИИ" in joined(await u.send_photo(b"x"))
+    v = ai_app.user(new_telegram_id())
+    await onboard(v, ai="ИИ только для текста")
+    out = joined(await v.send_voice(b"OggS"))
+    assert "Разрешить" in out
+    await v.tap("Разрешить ИИ для фото")
+    assert "Распознано" in joined(await v.send_voice(b"OggS" + b"\x00" * 10))
+
+
+async def test_workout_text_blocks_programs_and_history(ai_app: App) -> None:
+    u = ai_app.user(new_telegram_id())
+    await onboard(u, ai="ИИ для текста, фото и голоса")
+    await u.send("🏋️ Тренировки")
+    await u.tap("Записать выполненную")
+    await u.tap("Описать текстом")
+    out = joined(await u.send("жим 60 кг 10 10 8, тяга вертикального блока 70 кг 12 12 10"))
+    assert "жим: 2×(60×10); 60×8" in out and "Вид: не выбран" in out
+    out = joined(await u.tap("Создать вид «Силовая»"))
+    assert "Вид: Силовая" in out
+    assert "Тренировка записана" in joined(await u.tap("✅ Сохранить"))
+
+    # Template with a block plan, weekly planning, program, guided start.
+    await u.send("🏋️ Тренировки")
+    await u.tap("Мои программы")
+    await u.tap("Новая программа")
+    await u.send("Зал 3 раза в неделю")
+    await u.send("🏋️ Тренировки")
+    await u.tap("Мои шаблоны")
+    await u.tap("Новый шаблон")
+    await u.tap("Силовая")
+    await u.send("Верх тела")
+    out = joined(await u.send("Разминка\nжим 20x15 40x10\nОсновная\nжим 60x10 60x10 60x8"))
+    assert "Разминка" in out and "жим: 20×15 (разм.); 40×10 (разм.)" in out
+    await u.tap("Пропустить")  # duration target
+    await u.tap("Пропустить")  # RPE target
+    await u.tap("Сохранить")
+    tpl = u.button("▶️ Начать")
+    await u.send("🏋️ Тренировки")
+    await u.tap("Мои шаблоны")
+    await u.tap("Верх тела")
+    await u.tap("В программу")
+    await u.tap("Зал 3 раза в неделю")
+    await u.tap("Верх тела")
+    await u.tap("По дням недели")
+    await u.tap("Пн")
+    await u.tap("Чт")
+    assert "Запланировано тренировок" in joined(await u.tap("✅ Запланировать"))
+
+    assert "1/2. План: жим: 20×15 (разм.); 40×10 (разм.)" in joined(await u.press(tpl))
+    out = joined(await u.tap("Пропустить"))  # warm-up not logged
+    assert "2/2. План: жим: 2×(60×10); 60×8" in out
+    await u.tap("✓ Как в плане")  # explicit "done as planned" for item 2
+    await u.send("58")  # duration
+    out = joined(await u.send("8"))  # RPE
+    assert "жим: 2×(60×10); 60×8" in out
+    assert "Тренировка записана" in joined(await u.tap("Сохранить"))
+
+    await u.send("📈 История")
+    out = joined(await u.tap("По видам"))
+    assert "Силовая: 2 раз" in out and "объём" in out
+    out = joined(await u.tap("Тренировки"))
+    assert "Силовая — Верх тела" in out
+
+    # AI-proposed activity schema requires confirmation.
+    await u.send("🏋️ Тренировки")
+    await u.tap("Создать тренировку")
+    await u.tap("Описать словами")
+    out = joined(await u.send("Плавание. Хочу учитывать дистанцию"))
+    assert "Предлагаемая схема" in out and "Дистанция — Число, km" in out
+    assert "создан" in joined(await u.tap("✅ Создать"))
+
+
+async def test_strong_import_export_and_delete(app: App) -> None:
+    u = app.user(new_telegram_id())
+    await onboard(u)
+    await u.send("🏋️ Тренировки")
+    await u.tap("Импорт из Strong")
+    out = joined(await u.send_document(STRONG_CSV.encode(), "strong.csv"))
+    assert "Найдено тренировок: 2" in out and "Строк с ошибками: 2" in out
+    assert "Импортировано тренировок: 2" in joined(await u.tap("Импортировать"))
+    await u.send("🏋️ Тренировки")
+    await u.tap("Импорт из Strong")
+    assert "уже импортирован" in joined(await u.send_document(STRONG_CSV.encode(), "strong.csv"))
+
+    await u.send("⚙️ Настройки")
+    await u.tap("Экспорт данных")
+    doc = u.sent_documents()[-1]
+    payload = json.loads(doc.document.data)
+    assert len(payload["workout_sessions"]) == 2 and payload["format"] == "ritm-export-v1"
+
+    await u.send("⚙️ Настройки")
+    await u.tap("Удалить аккаунт")
+    assert "не подтверждено" in joined(await u.send("да"))
+    assert "удалены" in joined(await u.send("УДАЛИТЬ"))
+    async with app.sm() as s:
+        user = await resolve_user(s, u.id)
+        assert user.onboarding_step == "language"
+        rows = (await s.execute(select(WorkoutSession))).scalars().all()
+        assert rows == []
+
+
+async def test_reminders_settings(app: App) -> None:
+    u = app.user(new_telegram_id())
+    await onboard(u, "Europe/Moscow")
+    await u.send("⚙️ Настройки")
+    await u.tap("Напоминания")
+    await u.tap("Добавить")
+    await u.tap("Взвешивание")
+    assert "Не понял время" in joined(await u.send("25:99"))
+    await u.send("08:30")
+    assert "08:30 сохранено" in joined(await u.tap("По будням"))
+    await u.send("⚙️ Настройки")
+    await u.tap("Тихие часы")
+    assert "сохранены" in joined(await u.send("22:00-07:00"))
+    await u.send("⚙️ Настройки")
+    out = joined(await u.tap("Напоминания"))
+    assert "🔔 08:30 · Взвешивание · По будням" in out
 
 
 async def test_english_localization(app: App) -> None:
     u = app.user(new_telegram_id())
     await u.send("/start")
-    out = await u.tap("English")
-    assert "18 or older" in joined(out)
+    assert "18 or older" in joined(await u.tap("English"))
     await u.tap("I'm 18 or older")
     await u.tap("No AI")
     await u.send("Europe/London")
     await u.tap("Metric")
     await u.tap("Skip")
-    out = await u.tap("No calorie target")
-    assert "All set" in joined(out)
-    assert "Food: no entries yet" in joined(await u.send("📊 Today"))
+    assert "All set" in joined(await u.tap("No calorie target"))
+    out = joined(await u.send("📅 My day"))
+    assert "Today" in out and "Nothing logged yet" in out
+    await u.send("🍽 Log food")
+    await u.tap("Text")
+    out = joined(await u.send("rice 150 g"))
+    assert "Draft" in out and "kcal unknown" in out

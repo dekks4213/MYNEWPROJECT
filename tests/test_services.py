@@ -19,8 +19,8 @@ from fitcoach.domain.fields import FieldDefinition, FieldType, default_duration_
 from fitcoach.domain.nutrition import Precision
 from fitcoach.services.activities import ActivityService
 from fitcoach.services.diary import DiaryService
-from fitcoach.services.drafts import DraftService
 from fitcoach.services.errors import Conflict, ServiceError
+from fitcoach.services.food import FoodService
 from fitcoach.services.summary import build_day_summary
 from fitcoach.services.users import UserService, local_today
 from tests.conftest import make_user, open_user, requires_db
@@ -210,17 +210,18 @@ async def test_draft_confirmation_is_idempotent(
         user = await open_user(s, tid)
         user.ai_text_consent_at = dt.datetime.now(dt.UTC)
         gateway = AIGateway(MockProvider(), Settings(ai_provider="mock"))
-        meal = await gateway.parse_meal(s, user, "гречка, котлета и чай")
-        assert [i.name for i in meal.items] == ["гречка", "котлета", "чай"]
-        assert all(i.energy_kcal is None for i in meal.items)  # mock never invents numbers
-        drafts = DraftService(s, user)
-        draft = await drafts.create_meal_draft(meal)
-        entries = await drafts.confirm_meal(draft.id)
+        food = FoodService(s, user, gateway=gateway)
+        draft = await food.draft_from_text("гречка, котлета и чай")
+        _, state = await food.get_draft(draft.id)
+        assert [i.name for i in state.items] == ["гречка", "котлета", "чай"]
+        assert all(i.energy_kcal is None for i in state.items)  # mock never invents numbers
+        assert state.mock
+        entries = await food.confirm(draft.id, draft.version)
         assert len(entries) == 3
         with pytest.raises(Conflict):
-            await drafts.confirm_meal(draft.id)
+            await food.confirm(draft.id, draft.version)
         with pytest.raises(Conflict):
-            await drafts.cancel(draft.id)
+            await food.cancel(draft.id)
         count = (
             (await s.execute(select(FoodEntry).where(FoodEntry.draft_id == draft.id)))
             .scalars()
@@ -240,23 +241,24 @@ async def test_ai_failure_budget_and_consent_keep_manual_mode_working(
             MockProvider(fail=True), Settings(ai_provider="mock", ai_user_daily_calls=2)
         )
         with pytest.raises(AIUnavailableError, match="no_consent"):
-            await gateway.parse_meal(s, user, "суп")
+            await gateway.parse_food_text(s, user, "суп")
         user.ai_text_consent_at = dt.datetime.now(dt.UTC)
         with pytest.raises(AIUnavailableError, match="input_too_long"):
-            await gateway.parse_meal(s, user, "x" * 5000)
+            await gateway.parse_food_text(s, user, "x" * 5000)
         for _ in range(2):
             with pytest.raises(AIUnavailableError, match="provider_error"):
-                await gateway.parse_meal(s, user, "суп")
+                await gateway.parse_food_text(s, user, "суп")
         gateway.breaker.success()  # isolate the budget check from the circuit breaker
         with pytest.raises(AIUnavailableError, match="budget_exhausted"):
-            await gateway.parse_meal(s, user, "суп")
+            await gateway.parse_food_text(s, user, "суп")
         statuses = await s.execute(select(AiCall.status).where(AiCall.owner_id == user.id))
         assert sorted(statuses.scalars().all()) == ["provider_error", "provider_error"]
-        entry = await DiaryService(s, user).add_food(
-            "суп", energy_kcal=None, precision=Precision.UNKNOWN
-        )
+        # Manual path still works with the same (exhausted, failing) gateway attached.
+        food = FoodService(s, user, gateway=gateway)
+        draft = await food.draft_from_text("суп 300 г", use_ai=False)
+        entries = await food.confirm(draft.id, draft.version)
         await s.commit()
-        assert entry.id
+        assert entries[0].id
 
 
 async def test_circuit_breaker_opens_after_repeated_failures(
@@ -270,9 +272,9 @@ async def test_circuit_breaker_opens_after_repeated_failures(
         gateway = AIGateway(provider, Settings(ai_provider="mock", ai_user_daily_calls=10))
         for _ in range(3):
             with pytest.raises(AIUnavailableError, match="provider_error"):
-                await gateway.parse_meal(s, user, "суп")
+                await gateway.parse_food_text(s, user, "суп")
         with pytest.raises(AIUnavailableError, match="circuit_open"):
-            await gateway.parse_meal(s, user, "суп")
+            await gateway.parse_food_text(s, user, "суп")
         assert provider.calls == 3
 
 

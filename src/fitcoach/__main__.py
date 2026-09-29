@@ -8,8 +8,9 @@ import logging
 import uvicorn
 from sqlalchemy import text
 
-from fitcoach.ai.gateway import build_gateway
+from fitcoach.ai.gateway import build_gateway, verify_provider
 from fitcoach.bot.app import build_bot, build_dispatcher
+from fitcoach.bot.scheduler import reminder_loop
 from fitcoach.config import get_settings
 from fitcoach.db.session import create_engine, create_sessionmaker
 
@@ -23,12 +24,19 @@ async def _polling() -> None:
             text("DELETE FROM processed_updates WHERE processed_at < now() - interval '7 days'")
         )
     bot = build_bot(settings)
-    dp = build_dispatcher(sessionmaker, build_gateway(settings), settings)
+    gateway = build_gateway(settings)
+    logging.getLogger(__name__).info(await verify_provider(gateway))
+    dp = build_dispatcher(sessionmaker, gateway, settings)
     # Only one polling consumer per token: delete any webhook first.
     await bot.delete_webhook(drop_pending_updates=False)
+    jobs = []
+    if settings.reminders_enabled:
+        jobs.append(asyncio.create_task(reminder_loop(bot, sessionmaker)))
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        for job in jobs:
+            job.cancel()
         await bot.session.close()
         await engine.dispose()
 
