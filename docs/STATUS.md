@@ -90,7 +90,7 @@ Live Gemini results (key from `.env`, never printed):
 
 ## Mocked / not verified
 
-- **Telegram Bot API**: not reachable from this environment (proxy 403). All bot flows are verified with a recording fake session (13 e2e scenarios, including photo/voice/document downloads). Live Telegram is **not verified**.
+- **Telegram Bot API**: not reachable from this environment (proxy 403). All bot flows are verified with a recording fake session (9 end-to-end scenarios in tests/test_bot_e2e.py, including photo/voice/document downloads, plus webhook tests). Live Telegram is **not verified**.
 - **Voice via OGG/Opus** (Telegram's format): the validation path is tested, but the live Gemini call was verified with WAV only (no encoder here).
 - **Open Food Facts / USDA FDC**: hosts blocked here (403). The adapters are contract-tested with recorded response shapes and are **disabled by default** (`FOOD_SOURCES=`). USDA needs its own key.
 - **Strong CSV**: the parser follows the historically published export columns; not checked against a fresh export from the current app.
