@@ -36,6 +36,7 @@ from fitcoach.domain.food import (
     Per100,
     Unit,
     default_meal_type,
+    detect_meal_type,
     normalize_name,
     parse_amount,
     parse_food_line,
@@ -201,7 +202,7 @@ class FoodService:
             raise ServiceError("bad_food_text")
         if use_ai and self.gateway is not None and self.gateway.text_available(self.user):
             parse = await self.gateway.parse_food_text(self.session, self.user, text)
-            return await self.draft_from_parse(parse, "text", ai=True)
+            return await self.draft_from_parse(parse, "text", ai=True, user_text=text)
         items = [
             FoodItemAI(
                 name=p.name,
@@ -214,13 +215,13 @@ class FoodService:
         ]
         if not items:
             raise ServiceError("bad_food_text")
-        return await self.draft_from_parse(FoodParse(items=items), "text", ai=False)
+        return await self.draft_from_parse(FoodParse(items=items), "text", ai=False, user_text=text)
 
     async def draft_from_photo(self, image: bytes, mime: str, caption: str | None) -> Draft:
         if self.gateway is None:
             raise ServiceError("ai_required")
         parse = await self.gateway.analyze_food_image(self.session, self.user, image, mime, caption)
-        return await self.draft_from_parse(parse, "photo", ai=True)
+        return await self.draft_from_parse(parse, "photo", ai=True, user_text=caption)
 
     async def draft_from_voice(self, audio: bytes, mime: str) -> Draft:
         if self.gateway is None:
@@ -229,7 +230,12 @@ class FoodService:
         return await self.draft_from_parse(parse, "voice", ai=True)
 
     async def draft_from_parse(
-        self, parse: FoodParse, origin: Literal["text", "photo", "voice"], *, ai: bool
+        self,
+        parse: FoodParse,
+        origin: Literal["text", "photo", "voice"],
+        *,
+        ai: bool,
+        user_text: str | None = None,
     ) -> Draft:
         items: list[DraftItem] = []
         if parse.copy_request is not None:
@@ -238,10 +244,12 @@ class FoodService:
             items.append(compute(await self._resolve(ai_item, allow_estimate=ai)))
         if not items and not parse.clarification:
             raise ServiceError("nothing_recognized")
-        meal_type = parse.meal_type or (
-            parse.copy_request.meal_type
-            if parse.copy_request and parse.copy_request.meal_type
-            else self._meal_type()
+        # Meal type: named by the user (text, caption or transcript), or the copied meal's,
+        # otherwise derived from local time. The model's own guess is not used.
+        meal_type = (
+            detect_meal_type(user_text or parse.transcript)
+            or (parse.copy_request.meal_type if parse.copy_request else None)
+            or self._meal_type()
         )
         state = FoodDraftState(
             origin=origin,

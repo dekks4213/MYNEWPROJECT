@@ -565,3 +565,30 @@ def test_media_size_limits() -> None:
         check_voice(b"OggS", duration_s=500, max_bytes=100, max_seconds=60)
     with pytest.raises(ServiceError, match="bad_media"):
         check_voice(b"ID3xxxx", duration_s=5, max_bytes=100, max_seconds=60)
+
+
+def test_detect_meal_type_only_from_explicit_words() -> None:
+    from fitcoach.domain.food import detect_meal_type
+
+    assert detect_meal_type("на обед съел суп") is MealType.LUNCH
+    assert detect_meal_type("For breakfast: eggs") is MealType.BREAKFAST
+    assert detect_meal_type("курица с рисом") is None
+    assert detect_meal_type("завтрак и обед вместе") is None  # ambiguous
+    assert detect_meal_type(None) is None
+
+
+@requires_db
+async def test_model_meal_type_guess_is_ignored(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    tid = await _consenting_user(sessionmaker)
+    parse = FoodParse(meal_type=MealType.BREAKFAST, items=[FoodItemAI(name="суп")])
+    async with sessionmaker() as s:
+        user = await open_user(s, tid)
+        svc = FoodService(s, user, gateway=_gateway(food=parse))
+        svc._meal_type = lambda now=None: MealType.LUNCH  # type: ignore[method-assign]
+        draft = await svc.draft_from_text("суп")
+        assert (await svc.get_draft(draft.id))[1].meal_type is MealType.LUNCH
+        draft = await svc.draft_from_text("на ужин суп")
+        assert (await svc.get_draft(draft.id))[1].meal_type is MealType.DINNER
+        await s.commit()

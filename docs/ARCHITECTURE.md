@@ -1,72 +1,121 @@
 # Architecture
 
-Modular monolith, one repository, Python 3.12.
+Modular monolith, Python 3.12, one repository. Package name `fitcoach` (product brand
+"РИТМ / RITM" is configuration: `APP_NAME`, i18n texts).
 
 ```
 src/fitcoach/
-  domain/      pure rules: number/duration parsing, field schemas, nutrition totals
+  domain/      pure rules: units/durations, field schemas, food arithmetic + text parser,
+               workout blocks + set parser, starter schemas, reminder schedule
   db/          SQLAlchemy models, engine, transaction-scoped RLS identity
-  services/    application services (users, diary, activities, drafts, summary)
-  ai/          typed AI gateway, providers (mock, gemini), budgets, circuit breaker
-  bot/         aiogram adapter: middleware, handlers, keyboards, formatting
-  api/         FastAPI: /healthz and Telegram webhook
-  i18n/        ru (default) / en catalogs
-  prompts/     versioned runtime prompts (meal_extraction_v1)
-migrations/    Alembic (owner role only)
+  services/    users, diary, food (drafts, catalog, meals, recipes), food_sources,
+               media, activities (types/templates/programs/sessions), workout_drafts,
+               history, reminders, strong_import, account (export/delete), summary
+  ai/          typed task contracts, gateway (consent, budgets, breaker, metering),
+               providers: gemini, mock
+  bot/         aiogram adapter: middleware, handlers per section, ui (formatting),
+               scheduler (reminder loop)
+  api/         FastAPI: /healthz, Telegram webhook
+  i18n/        ru (default) / en
+  prompts/     versioned runtime prompts (*_v1.txt)
+migrations/    0001 (P0 schema + RLS), 0002 (P1 tables + RLS + scheduler function)
 ```
 
-Domain code has no Telegram or DB dependencies. Handlers do presentation only; services own validation, authorization and persistence.
+Handlers only present data; services own validation, ownership and persistence; domain code
+has no Telegram or DB dependencies.
 
-## Identity and isolation
+## Identity and isolation (unchanged from P0, extended to all P1 tables)
 
-- A user is identified by the verified Telegram numeric ID from the update (never username or client-supplied IDs). Only private chats are processed.
-- `UnitOfWorkMiddleware` opens one DB session per update, resolves the user and binds `app.telegram_id` / `app.user_id` with `set_config(..., is_local => true)` on **every** transaction begin (`after_begin` event). The context ends at COMMIT/ROLLBACK and cannot leak to the next pooled connection (tested with a pool of 1).
-- Every personal table has `owner_id` and an RLS policy `owner_id = app_current_user_id()`; `users` is scoped by Telegram ID.
-- Runtime role `fitcoach_app`: not owner, `NOBYPASSRLS`, no UPDATE on version tables. Migrations use `fitcoach_owner`.
-- Composite foreign keys `(ref_id, owner_id) → parent(id, owner_id)` prevent cross-user references even if service checks were bypassed.
-- Services also filter by `owner_id` and return "not found" for foreign IDs (callback data is untrusted).
+- Identity = verified Telegram numeric ID; private chats only.
+- `UnitOfWorkMiddleware`: one DB session per update. It binds `app.telegram_id` / `app.user_id` transaction-locally on every transaction begin, records `update_id` for idempotency, commits, and maps `ServiceError` / `AIUnavailableError` to localized messages.
+- RLS policies (`owner_id = app_current_user_id()`) on all 17 personal tables. `users` is scoped by Telegram ID. The runtime role is not the owner, has `NOBYPASSRLS`, and has no UPDATE on version tables.
+- Same-owner composite FKs, including `food_entries.food_id → foods`, `workout_templates.program_id → programs`, `reminder_deliveries.reminder_id → reminders`.
+- Services filter by owner and treat foreign IDs as "not found". IDs inside callback data, FSM data, drafts or model output are never trusted: they are re-resolved with the owner filter before use. A tampered `food_id` in a draft payload is dropped.
+- The only cross-user query is `app_due_reminders(now, limit)`, a `SECURITY DEFINER` function. It returns `(reminder_id, owner_id, telegram_id)` so the scheduler can bind each user's own RLS context. It returns no diary data.
 
-## Integrity
+## Nutrition
 
-- Telegram `update_id` is recorded in `processed_updates` inside the handler transaction; duplicates are skipped. Markers older than 7 days are purged at polling start.
-- "Saved" is sent only after `commit()` succeeds. Expected errors roll back and show a localized message.
-- Edits use version checks (`version` column; `UPDATE … WHERE version = :expected`).
-- Draft confirmation and plan completion are atomic `UPDATE … WHERE status = 'pending'/'planned'`.
-- Deletes are soft (`deleted_at`) and reversible.
+Pipeline:
+1. Input — text, photo, voice, copy, saved meal/recipe or a catalog food.
+2. `FoodParse` — from the AI or from the deterministic parser.
+3. Resolution per item, in order: the user's catalog (`foods`, exact normalized name + brand) → optional external source (USDA generic by English name; Open Food Facts only when the brand matches) → user-stated kcal → labelled AI per-100 g estimate. AI estimates are used for unbranded foods only, never branded ones.
+4. Deterministic `compute()` produces the draft.
+5. The draft is edited (amount, "350 ккал", remove, add, meal type).
+6. Confirm → `food_entries`.
 
-## Universal activity builder (P0 subset)
-
-| Concept | Table | Notes |
-|---|---|---|
-| Activity type | `activity_types` | user-owned, archivable |
-| Field definitions | `activity_type_versions.fields` (JSONB) | immutable versions, validated by `FieldSchema` |
-| Template | `workout_templates` + `workout_template_versions` | immutable revisions with planned targets |
-| Plan | `planned_workouts` | status `planned → completed`; never implies performed work |
-| Actual session | `workout_sessions` | values + original input + field snapshot + names at the time |
-
-Fields are declarative data: `key` (stable, `f1`, `f2`…, independent of label), `label`, `type` (decimal, integer, duration, selection, boolean, text), `unit`, `required`, `aggregation`, `duration_format`, `choices`, bounds. No formulas or code are ever executed. A key's type cannot change between versions.
-
-Durations are stored in seconds. For `h:mm` fields `1:30` = 90 min and a bare number = minutes; for `mm:ss` fields `1:30` = 90 s and a bare number is rejected as ambiguous. Decimals accept commas and are stored as exact strings. Skipped values are absent (unknown), never zero, and targets are never copied into performed values.
-
-Blocks, intervals, repeat groups, multiple programs and cross-session aggregation are P1.
+- Amounts: g/kg exact; ml→g only with a labelled density-1 estimate; pieces/servings only with a label serving size or an explicit `grams_estimate` (marked "≈"). Unknown amount → nutrients unknown, never zero.
+- Per-basis storage: `foods` keeps nutrients per 100 g, per 100 ml or per serving, plus source, source id, fetch time and preparation. Entries keep amount, unit, grams, nutrients, precision (`measured` / `recipe` / `approximate` / `unknown`) and `nutrient_source`.
+- Plausibility: per-100 g energy above 950 kcal or macros above 100 g are rejected.
+- Recipes: ingredient totals × (consumed g / cooked yield) or × fraction.
+- Meal type: taken from explicit words in the text/caption/transcript or a copied meal; otherwise from local time. The model's guess is ignored.
+- Drafts (`drafts` table) carry a `version`. Edits and confirmation are atomic `UPDATE … WHERE status='pending' AND version=:shown`, so stale buttons and concurrent taps cannot double-save.
 
 ## AI gateway
 
-`AIGateway.parse_meal` checks: provider enabled → user consent → input length → circuit breaker → atomic budget reservation (per user and global, per UTC day, row-locked `INSERT … ON CONFLICT DO UPDATE … WHERE calls < limit`) → provider call with timeout and concurrency limit → Pydantic validation → metering row in `ai_calls` (status, tokens; never content). Reserved calls are not refunded on failure (conservative). Any failure raises `AIUnavailableError`; manual logging is unaffected.
+`AIGateway` exposes task methods only: `parse_food_text`, `analyze_food_image`, `parse_food_voice`, `parse_workout_text`, `build_activity_draft`. Each goes through one `_run` pipeline:
 
-The meal prompt extracts only what the user stated; nutrient numbers are null unless stated. User text is passed as JSON data, not concatenated into instructions.
+1. consent — text and media consents are separate;
+2. input limits;
+3. circuit breaker (3 failures → 60 s open);
+4. atomic reservation, per user (calls + media calls) and global per UTC day, committed before the call;
+5. provider call under a semaphore (`AI_MAX_CONCURRENCY`) and timeout;
+6. Pydantic validation;
+7. metering in `ai_calls`: task, model, status, tokens incl. thinking tokens, media type, latency, refunded;
+8. reconciliation: the reservation is released when the provider certainly did not process the request (connection error, 429, 4xx config errors).
 
-## Assumptions (conservative, P0)
+Content is never stored in logs or metering.
 
-- Metric units only; imperial is planned.
-- Adult-only product: users who do not confirm 18+ cannot proceed.
-- No automatic calorie/energy recommendations: targets are user-entered.
-- FSM (in-progress multi-step input) is in memory; a restart interrupts an unfinished input but never loses saved records or onboarding progress. Webhook mode assumes one process.
-- AI budget counts calls, not money; token counts are recorded when the provider reports them. Prices are not yet tracked.
-- "Day" for diary entries is the user's local date from their confirmed IANA time zone; AI budgets use the UTC date.
+`GeminiProvider`:
+- REST `generateContent` with `responseJsonSchema` generated from the Pydantic contracts. The schema is sanitized, because `maxItems` caused HTTP 400 in live tests; limits are re-checked by Pydantic.
+- User content is passed as JSON under `untrusted_user_input`; system prompts are versioned files.
+- Retries with exponential backoff and jitter on 429/5xx.
+- Startup `check()` verifies the configured models; if a model is missing, AI is switched off (fail closed to manual mode).
+
+The model never supplies IDs: activity field keys (`f1`, `f2`…) are assigned server-side, and the contracts forbid extra fields.
+
+## Workout builder
+
+| Concept | Storage |
+|---|---|
+| Activity type (`kind`: custom/strength/swimming/enduro/moto_ride, `counts_as_training`) | `activity_types` |
+| Versioned field definitions | `activity_type_versions.fields` (immutable) |
+| Template revisions: field targets + `blocks` (planned) | `workout_template_versions` (immutable) |
+| Programs | `programs`, `workout_templates.program_id` |
+| Plans | `planned_workouts` (`planned → completed`) |
+| Actual sessions: field values, original input, field snapshot, `blocks` (performed), `source`, `source_ref` | `workout_sessions` |
+
+- Blocks (`domain.workout`): `Block(kind, title, rounds, items[Item(name, sets[SetSpec])])`. A `SetSpec` holds reps, load_kg + load_mode (total / per-hand / machine setting), distance, duration, rest, RPE, RIR, warm-up and stroke. The same shape serves gym, swimming and drills.
+- Set notation: `60x10` = load × reps; after "60 кг", `3x10` = sets × reps; `4x50м` = repeats × distance. Block headers are «Разминка/Основная/Техника/Интервалы/Заминка».
+- Recording from a template shows targets per item. Actual sets are typed; "✓ как в плане" is an explicit user action. Targets never become results implicitly.
+- Totals (`totals()`) count only compatible quantities: volume only for kg total loads on working sets, distance in metres, pace from total time ÷ distance. History sums metrics per activity type and per (field key, type, unit) from each session's snapshot. Motorcycle rides are marked "not training", and no calories are derived from them.
+- Starters are editable copies with labels in the user's language; custom types need no migration.
+
+## Reminders
+
+- `reminders` (local time, weekday mask, enabled, next_fire_at) and `reminder_deliveries` (unique `(reminder_id, scheduled_for)`, status sending/sent/failed/blocked/skipped).
+- One asyncio loop inside the bot process (polling or webhook), every 30 s. For each due reminder:
+  1. claim it with `FOR UPDATE SKIP LOCKED`, insert the delivery row and advance `next_fire_at`, commit;
+  2. send;
+  3. record the outcome.
+- Occurrences older than 2 h are skipped, not spammed.
+- If the bot is blocked, all of that user's reminders are switched off.
+- Quiet hours move a reminder to the end of the window. DST is handled by zoneinfo.
+- "Workout" reminders fire only when there is an open plan today; "weigh-in" ones are skipped if the user already weighed in.
+- No Redis: PostgreSQL row claiming is sufficient.
+
+## Imports
+
+Strong CSV: comma or semicolon delimiters, known header aliases, unit columns or unit suffixes (lb → kg). Warm-up set order "W" is marked as warm-up. Errors are reported per row, unknown columns are listed. Idempotency comes from the file SHA-256 per user and a per-workout `source_ref` with a unique index. Imported sessions go to the user's strength type.
 
 ## Privacy
 
-- Data flow: Telegram → this server (PostgreSQL). With AI enabled *and* user consent, the text of a meal description goes to the configured provider. Nothing else leaves the server.
-- Logs contain no message text, tokens or health data; aiogram event and httpx request logs are raised to WARNING.
-- Export, account deletion, backups and retention are P1 and not implemented yet.
+- Data flow: Telegram → this server (PostgreSQL). With consent, meal/workout text goes to the configured AI provider, and so do photos (re-encoded JPEG ≤ 1280 px, EXIF removed) and voice (OGG).
+- Optional food databases receive only a food name/brand query.
+- Logs contain exception type + code location only (`logsafe.log_failure`), no message text or tokens.
+- Owner-only JSON export; account deletion cascades through every owner FK. Backups: see OPERATIONS.md.
+
+## Known assumptions
+
+- Metric units only.
+- FSM state for multi-step input lives in memory, so a restart interrupts an unfinished dialog step. Drafts and records are in PostgreSQL.
+- AI budgets count calls; tokens are recorded. Money cost is not computed, because prices change and would need a dated price table.

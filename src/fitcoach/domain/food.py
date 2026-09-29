@@ -324,6 +324,23 @@ def normalize_name(name: str) -> str:
     return " ".join(re.sub(r"[^\w\s%]", " ", name.lower().replace("ё", "е")).split())
 
 
+_MEAL_WORDS: dict[MealType, tuple[str, ...]] = {
+    MealType.BREAKFAST: ("завтрак", "breakfast"),
+    MealType.LUNCH: ("обед", "lunch"),
+    MealType.DINNER: ("ужин", "dinner", "supper"),
+    MealType.SNACK: ("перекус", "snack"),
+}
+
+
+def detect_meal_type(text: str | None) -> MealType | None:
+    """Only an explicitly named meal counts; the model's guess is never trusted for this."""
+    if not text:
+        return None
+    low = text.lower().replace("ё", "е")
+    found = {m for m, words in _MEAL_WORDS.items() if any(w in low for w in words)}
+    return found.pop() if len(found) == 1 else None
+
+
 def default_meal_type(local_hour: int) -> MealType:
     if 4 <= local_hour < 11:
         return MealType.BREAKFAST
