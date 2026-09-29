@@ -70,19 +70,18 @@ async def ai_app(database: dict[str, str]) -> AsyncIterator[App]:
 
 
 async def onboard(
-    u: TgUser, tz_text: str | None = None, target: str | None = None, ai: str = "Без ИИ"
+    u: TgUser, tz_text: str | None = None, target: str | None = None, ai: str = "Без ИИ, вручную"
 ) -> None:
     out = await u.send("/start")
     assert any("РИТМ" in t for t in out)
     await u.tap("Русский")
     await u.tap("Мне 18 или больше")
     out = await u.tap(ai)
-    assert any("часовой пояс" in t for t in out)
+    assert any("Где вы живёте" in t for t in out)
     if tz_text:
         await u.send(tz_text)
     else:
-        await u.tap("UTC")
-    await u.tap("Метрическая")
+        await u.tap("Лондон")
     await u.tap("Наладить привычки")
     out = await u.send(target) if target else await u.tap("Без цели")
     assert any("Готово" in t for t in out)
@@ -235,7 +234,7 @@ async def test_corrections_undo_and_draft_editing(app: App) -> None:
 
 async def test_ai_text_photo_voice_flows_are_drafts(ai_app: App) -> None:
     u = ai_app.user(new_telegram_id())
-    await onboard(u, ai="ИИ для текста, фото и голоса")
+    await onboard(u, ai="С ИИ: текст, фото и голос")
     await u.send("🍽 Записать еду")
     await u.tap("Текстом")
     out = joined(await u.send("гречка 200 г и котлета"))
@@ -271,7 +270,7 @@ async def test_media_without_ai_or_consent(app: App, ai_app: App) -> None:
         u.button("📷 Фото")  # unfinished/unavailable entries are not shown
     assert "только с ИИ" in joined(await u.send_photo(b"x"))
     v = ai_app.user(new_telegram_id())
-    await onboard(v, ai="ИИ только для текста")
+    await onboard(v, ai="С ИИ только текст")
     out = joined(await v.send_voice(b"OggS"))
     assert "Разрешить" in out
     await v.tap("Разрешить ИИ для фото")
@@ -280,7 +279,7 @@ async def test_media_without_ai_or_consent(app: App, ai_app: App) -> None:
 
 async def test_workout_text_blocks_programs_and_history(ai_app: App) -> None:
     u = ai_app.user(new_telegram_id())
-    await onboard(u, ai="ИИ для текста, фото и голоса")
+    await onboard(u, ai="С ИИ: текст, фото и голос")
     await u.send("🏋️ Тренировки")
     await u.tap("Записать выполненную")
     await u.tap("Описать текстом")
@@ -317,9 +316,9 @@ async def test_workout_text_blocks_programs_and_history(ai_app: App) -> None:
     await u.tap("Чт")
     assert "Запланировано тренировок" in joined(await u.tap("✅ Запланировать"))
 
-    assert "1/2. План: жим: 20×15 (разм.); 40×10 (разм.)" in joined(await u.press(tpl))
+    assert "1/2. По плану: жим: 20×15 (разм.); 40×10 (разм.)" in joined(await u.press(tpl))
     out = joined(await u.tap("Пропустить"))  # warm-up not logged
-    assert "2/2. План: жим: 2×(60×10); 60×8" in out
+    assert "2/2. По плану: жим: 2×(60×10); 60×8" in out
     await u.tap("✓ Как в плане")  # explicit "done as planned" for item 2
     await u.send("58")  # duration
     out = joined(await u.send("8"))  # RPE
@@ -397,8 +396,7 @@ async def test_english_localization(app: App) -> None:
     assert "18 or older" in joined(await u.tap("English"))
     await u.tap("I'm 18 or older")
     await u.tap("No AI")
-    await u.send("Europe/London")
-    await u.tap("Metric")
+    await u.tap("London")
     await u.tap("Skip")
     assert "All set" in joined(await u.tap("No calorie target"))
     out = joined(await u.send("📅 My day"))
@@ -407,3 +405,76 @@ async def test_english_localization(app: App) -> None:
     await u.tap("Text")
     out = joined(await u.send("rice 150 g"))
     assert "Draft" in out and "kcal unknown" in out
+
+
+async def test_buttons_instead_of_typing(app: App) -> None:
+    u = app.user(new_telegram_id())
+    await u.send("/start")
+    await u.tap("Русский")
+    await u.tap("Мне 18 или больше")
+    await u.tap("Без ИИ, вручную")
+    out = joined(await u.tap("Москва"))  # city, not an IANA code; no "units" question
+    assert "цель" in out.lower() and "Метрическ" not in out
+    await u.tap("Наладить привычки")
+    assert "Готово" in joined(await u.tap("2200"))  # kcal preset
+
+    # Weight: first time typed, then quick buttons around the last value.
+    await u.send("/weight")
+    await u.send("80")
+    await u.send("/weight")
+    assert "80,2" in joined(await u.tap("80,2"))
+
+    # Food draft amounts via buttons.
+    await u.send("🍽 Записать еду")
+    await u.tap("Мой продукт")
+    await u.send("Рис; 130; 2,7/0,3/28")
+    await u.send("🍽 Записать еду")
+    await u.tap("Текстом")
+    await u.send("рис 100 г")
+    await u.tap("✏️ 1.")
+    assert "260 ккал" in joined(await u.tap("×2"))
+    await u.tap("✏️ 1.")
+    assert "195 ккал" in joined(await u.tap("150 г"))
+    await u.tap("✅ Сохранить")
+
+    # Workout: duration preset, effort 1–10 buttons, skip the rest.
+    await u.send("🏋️ Тренировки")
+    await u.tap("Создать тренировку")
+    await u.tap("Силовая")
+    await u.tap("✅ Создать")
+    await u.tap("✅ Записать выполненную")
+    out = joined(await u.tap("45 мин"))
+    assert "Насколько было тяжело" in out and "RPE" not in out
+    await u.tap("7")
+    await u.tap("Пропустить")  # no exercises
+    assert "Тренировка записана" in joined(await u.tap("Сохранить"))
+    out = joined(await u.send("📅 Мой день"))
+    assert "✓ Силовая · 45 мин" in out and "2 200 ккал" in out
+
+    # Reminder time and quiet hours via buttons.
+    await u.send("⚙️ Настройки")
+    await u.tap("Напоминания")
+    await u.tap("Добавить")
+    await u.tap("Записать еду")
+    await u.tap("20:00")
+    assert "20:00 сохранено" in joined(await u.tap("Каждый день"))
+    await u.send("⚙️ Настройки")
+    await u.tap("Тихие часы")
+    assert "сохранены" in joined(await u.tap("23:00–08:00"))
+
+
+async def test_copy_meal_buttons_pack_and_work(app: App) -> None:
+    u = app.user(new_telegram_id())
+    await onboard(u)
+    await u.send("🍽 Записать еду")
+    await u.tap("Текстом")
+    await u.send("суп 300 г")
+    await u.tap("✅ Сохранить")
+    await u.send("🍽 Записать еду")
+    out = joined(await u.tap("Скопировать приём пищи"))
+    assert "Какой приём пищи" in out
+    for label in ("Сегодня: Завтрак", "Сегодня: Обед", "Сегодня: Ужин", "Сегодня: Перекус"):
+        out = joined(await u.tap(label))
+        if "суп" in out:
+            break
+    assert "1. суп" in out

@@ -90,6 +90,10 @@ class UserService:
             raise ServiceError("bad_timezone") from exc
         self.user.timezone = name
         self._advance("timezone")
+        if self.user.onboarding_step == "units" and len(UNITS) == 1:
+            # Only metric is supported: don't ask a question with a single answer.
+            self.user.units = UNITS[0]
+            self._advance("units")
         return await self._flush()
 
     async def set_units(self, units: str) -> User:

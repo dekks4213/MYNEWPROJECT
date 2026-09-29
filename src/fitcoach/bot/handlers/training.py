@@ -976,7 +976,7 @@ async def value_text(message: Message, tr: Translator, state: FSMContext) -> Non
     await _store_value(message, tr, state, message.text)
 
 
-@router.callback_query(ValuesSG.value, Fd.filter(F.action.in_({"skip", "choice", "bool"})))
+@router.callback_query(ValuesSG.value, Fd.filter(F.action.in_({"skip", "choice", "bool", "val"})))
 async def value_button(
     query: CallbackQuery, callback_data: Fd, tr: Translator, state: FSMContext
 ) -> None:
@@ -993,7 +993,18 @@ async def value_button(
         raw = field.choices[index]
     elif callback_data.action == "bool":
         raw = "yes" if callback_data.value == "1" else "no"
+    elif callback_data.action == "val":
+        raw = callback_data.value[:20]  # re-validated by parse_field_value and the service
     await _store_value(msg(query), tr, state, raw)
+
+
+@router.callback_query(ValuesSG.value, Fd.filter(F.action == "skip_rest"))
+async def value_skip_rest(query: CallbackQuery, tr: Translator, state: FSMContext) -> None:
+    """Skip all remaining fields: unknown stays unknown."""
+    await query.answer()
+    data = await state.get_data()
+    await state.update_data(idx=len(data["fields"]))
+    await _values_done(msg(query), tr, state)
 
 
 def _actual_body(data: dict[str, Any]) -> WorkoutBody | None:

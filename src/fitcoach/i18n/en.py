@@ -45,29 +45,19 @@ TEXTS: dict[str, str] = {
     "ob.age_no": "I'm under 18",
     "ob.adults_only": "Sorry, the service is currently available to adults only. "
     "If you made a mistake, choose again.",
-    "ob.privacy": "How your data is handled:\n"
-    "• messages pass through Telegram and are stored on the bot owner's server;\n"
-    "• each user sees only their own records;\n"
-    "• optional AI parsing sends the text, photo or voice message to an external AI "
-    "provider (Google Gemini). Self-hosting does not mean the provider never receives this "
-    "data. Photo metadata (EXIF, location) is removed before sending.\n"
-    "All core features work without AI. AI status on this server: {status}.\n\n"
-    "What do you allow? You can change this in settings.",
+    "ob.privacy": "A few words about data:\n• only you see your records;\n• if you allow AI, your text, photo or voice goes to Google Gemini to understand what you ate. Location data is removed from photos.\nEverything essential works without AI. AI on this server: {status}.\n\nHow would you like to log?",
     "ob.ai_status_on": "enabled",
     "ob.ai_status_off": "disabled by the administrator",
     "ob.ai_status_mock": "test mode (no external provider)",
-    "ob.ai_allow_all": "AI for text, photos and voice",
+    "ob.ai_allow_all": "With AI: text, photos, voice",
     "ob.ai_allow_text": "AI for text only",
-    "ob.ai_deny": "No AI",
-    "ob.timezone": "Set your time zone — it decides which day your entries belong to and when "
-    "reminders arrive. Pick one or send an IANA name, e.g. Europe/London.",
+    "ob.ai_deny": "No AI, manually",
+    "ob.timezone": "Where do you live? Pick the nearest city with the same time — it decides which day your entries belong to and when reminders arrive. Not listed? Send a zone like Europe/Paris.",
     "ob.units": "Units: the metric system (kg, g, kcal, km) is currently supported. "
     "Please confirm.",
     "ob.units_metric": "Metric (kg, kcal)",
     "ob.goal": "What is your main goal? You can change it later.",
-    "ob.target": "Would you like a daily calorie target? Send a number (e.g. 2000) or skip. "
-    "The bot does not calculate an intake automatically — you choose the target "
-    "(with a professional if needed). Protein/fat/carb targets can be set in “Profile”.",
+    "ob.target": "How many calories a day do you want to eat? Pick one or type your number. Not sure — skip, you can set it later in “Profile”.",
     "ob.target_skip": "No calorie target",
     "ob.done": "All set! Log food by text, photo or voice, record workouts and check "
     "“My day”. Unknown values can be skipped — they are never counted as zero.",
@@ -121,10 +111,7 @@ TEXTS: dict[str, str] = {
     "food.copy": "📋 Copy a meal",
     "food.add_product": "➕ My product",
     "food.new_recipe": "🥘 New recipe",
-    "food.text_ask": "What did you eat? List items with amounts separated by commas, e.g.:\n"
-    "“oatmeal 60 g, milk 200 ml, banana”.\n"
-    "Calories come from your products (“My product”); you can add the rest in the draft, "
-    "e.g. “350 kcal”.",
+    "food.text_ask": "What did you eat? List items with amounts, e.g.:\n“oatmeal 60 g, milk 200 ml, banana”.\nCalories come from your products; you can adjust the rest with buttons.",
     "food.text_ask_ai": "What did you eat? Write it naturally, e.g.:\n"
     "“200 grams of chicken, about a cup of rice and some vegetables” or "
     "“same breakfast as yesterday but without yogurt”.\nYou'll see a draft before saving.",
@@ -152,9 +139,7 @@ TEXTS: dict[str, str] = {
     "food.meals_list": "My meals and recipes:",
     "food.recipe_portion_ask": "How much “{name}” did you eat? Send grams of the cooked dish "
     "(e.g. 350) or choose a fraction:",
-    "food.catalog_ask": "Add a product from its label (per 100 g) in one line:\n"
-    "“Cottage cheese 5%; 121; 17/5/3; 180”\n"
-    "Format: name; kcal; P/F/C; serving size in grams (optional). Use “-” for unknown values.",
+    "food.catalog_ask": "Add a product from its package. One line, per 100 g:\n“Cottage cheese 5%; 121; 17/5/3”\nname; calories; protein/fat/carbs. Skip anything not on the label.",
     "food.catalog_saved": "✅ “{name}” ({kcal} kcal per 100 g) added to favourites.",
     "food.log_it": "🍽 Log now",
     "food.recipe_name_ask": "What is the recipe called? E.g. “Pilaf”.",
@@ -202,8 +187,7 @@ TEXTS: dict[str, str] = {
     "draft.cancel": "✖️ Discard",
     "draft.save_meal": "⭐ Save as meal",
     "draft.cancelled": "Draft discarded, nothing was saved.",
-    "draft.edit_ask": "Item {n}: send an amount (“150 g”, “0.5 l”, “2 pcs”) or calories "
-    "(“350 kcal”).",
+    "draft.edit_ask": "How much “{n}”? Tap a button or type: “150 g”, “2 pcs”, “350 kcal”.",
     "draft.add_ask": "What should I add? E.g. “bread 30 g, cheese 20 g”.",
     "draft.meal_name_ask": "Name this meal, e.g. “My usual breakfast”.",
     # training
@@ -233,7 +217,7 @@ TEXTS: dict[str, str] = {
     "starter.enduro": "Enduro / motocross",
     "starter.moto_ride": "Motorcycle ride",
     "starter.f.duration": "Duration",
-    "starter.f.session_rpe": "Session effort (RPE 1–10)",
+    "starter.f.session_rpe": "How hard was it (1–10)",
     "starter.f.water": "Where",
     "starter.f.pool_length": "Pool length",
     "starter.f.distance": "Distance",
@@ -243,8 +227,8 @@ TEXTS: dict[str, str] = {
     "starter.f.riding_time": "Riding time",
     "starter.f.laps": "Laps / motos",
     "starter.f.surface": "Surface",
-    "starter.f.effort": "Effort (1–10)",
-    "starter.f.fatigue": "Fatigue (1–10)",
+    "starter.f.effort": "How hard (1–10)",
+    "starter.f.fatigue": "Tiredness after (1–10)",
     "starter.f.drills": "Technique drills",
     "starter.c.pool": "Pool",
     "starter.c.open_water": "Open water",
@@ -273,12 +257,11 @@ TEXTS: dict[str, str] = {
     "type.ask_field_type": "Value type:",
     "type.ask_unit": "Unit (e.g. km, m, kg) — or skip.",
     "type.ask_format": "How is time entered?",
-    "type.format_hmm": "h:mm (1:30 = one and a half hours)",
-    "type.format_mmss": "mm:ss (1:30 = 90 seconds)",
+    "type.format_hmm": "Long (hours and minutes)",
+    "type.format_mmss": "Short (minutes and seconds)",
     "type.ask_choices": "List the options separated by commas, e.g.: sand, clay, rocks.",
     "type.saved": "✅ Activity type “{name}” created.",
-    "type.ai_ask": "Describe what you want to track, e.g.:\n“Swimming. I want to track "
-    "distance, time, stroke and intervals.”\nI'll propose a schema for you to confirm.",
+    "type.ai_ask": "Describe what you want to track, e.g.:\n“Swimming: distance, time, stroke”.\nI'll propose a form for you to confirm.",
     "type.ai_preview": "Proposed schema “{name}”:",
     "ftype.decimal": "Number",
     "ftype.integer": "Whole number",
@@ -298,12 +281,9 @@ TEXTS: dict[str, str] = {
     "tpl.new": "➕ New template",
     "tpl.choose_type": "Which activity type is this template for?",
     "tpl.ask_name": "Template name, e.g. “Upper body” or “Pool 1800”.",
-    "tpl.blocks_ask": "Describe the plan line by line (optional). Blocks are headers:\n"
-    "Warm-up\nbench 20x15 40x10\nMain\nbench 60x10 60x10 60x8\n\nor for swimming:\n"
-    "Warm-up\n400m freestyle\nTechnique\n4x50m drills rest 30s\nMain\n"
-    "5x200m freestyle rest 60\nCooldown\n200m",
+    "tpl.blocks_ask": "Want to list the exercises? One per line, e.g.:\nWarm-up\nbench 20x15 40x10\nMain\nbench 60x10 60x10 60x8\n(weight × reps). Or skip.",
     "tpl.blocks_parsed": "Plan by blocks:",
-    "tpl.targets_intro": "Now planned field values (targets). Any can be skipped.",
+    "tpl.targets_intro": "Now the goals for this workout. You can tap “⏭ Skip the rest”.",
     "tpl.review": "Template “{name}”:",
     "tpl.saved": "✅ Template “{name}” saved.",
     "tpl.plan_note": "A plan is a target, not completed work.",
@@ -338,19 +318,15 @@ TEXTS: dict[str, str] = {
     "wd.fri": "Fri",
     "wd.sat": "Sat",
     "wd.sun": "Sun",
-    "rec.intro": "Logging “{name}”. Enter actual values — the plan is not copied automatically.",
-    "rec.item_prompt": "{n}/{total}. Plan: {target}\nWhat did you do? E.g. “60x10 60x10 60x8”, "
-    "“10 10 8” or “4x50m”.",
+    "rec.intro": "Logging “{name}”. Mark what you actually did — the plan isn't counted automatically.",
+    "rec.item_prompt": "{n}/{total}. Planned: {target}\nHow did it go? Tap “✓ As planned” or type yours, e.g. “60x10 60x10 60x8” (weight × reps).",
     "rec.as_planned": "✓ As planned",
-    "rec.extra_ask": "Add exercises or repeats? E.g.:\n“bench 60 kg 10 10 8, lat pulldown "
-    "70 kg 12 12 10” or “5x100m freestyle rest 60”. You can skip.",
+    "rec.extra_ask": "Want to log exercises? Type e.g. “bench 60 kg 10 10 8, row 70 kg 12 12 10”. Or skip.",
     "rec.review": "Check “{name}”:",
     "rec.empty": "No values entered — nothing saved.",
     "rec.saved": "✅ Workout logged.",
-    "wo.text_ask": "Describe the strength workout you did, e.g.:\n“bench 60 kg 10 10 8, "
-    "lat pulldown 70 kg 12 12 10”.",
-    "wo.text_ask_ai": "Describe what you did, e.g.:\n“bench 60 kg 10 10 8, lat pulldown 70 kg "
-    "12 12 10” or “swam 1200 metres today, including 5×100 freestyle, rest about a minute”.",
+    "wo.text_ask": "Type what you did, e.g.:\n“bench 60 kg 10 10 8, row 70 kg 12 12 10”\n(weight and reps in each set).",
+    "wo.text_ask_ai": "Describe what you did in your own words, e.g.:\n“bench 60 kg 10 10 8, row 70 kg 12 12 10” or “swam 1200 metres including 5×100 freestyle”.",
     "wo.draft_title": "Draft of a completed workout:",
     "wo.draft_type": "Type: {name}",
     "wo.type_missing": "not selected",
@@ -389,16 +365,14 @@ TEXTS: dict[str, str] = {
     "hist.sessions_title": "Recent workouts:",
     "hist.stats_title": "Last 30 days by activity type:",
     "hist.sessions_n": "{n}×",
-    "hist.stats_note": "Metrics are only summed within one activity type and identical units.",
+    "hist.stats_note": "Only the same measures of the same activity are added up: pool metres never mix with motorcycle kilometres.",
     "hist.empty": "No data yet.",
     # profile
     "profile.view": "Profile\nGoal: {goal}\nCalories: {kcal}\nProtein: {p}\nFat: {f}\n"
     "Carbs: {c}\nLast weight: {weight}\nTime zone: {tz}",
     "profile.targets": "🎯 Nutrition targets",
     "profile.goal": "🎯 Goal",
-    "profile.targets_ask": "Send targets in one line: “2300; 180/80/230” (kcal; P/F/C in "
-    "grams). Calories only (“2300”) or macros only (“; 180/80/230”) also work. "
-    "You set the targets — the bot doesn't calculate them.",
+    "profile.targets_ask": "Pick a calorie target or type yours. You can add protein/fat/carbs too: “2300; 180/80/230”.",
     "profile.targets_clear": "Clear targets",
     # settings
     "settings.view": "Settings\nLanguage: {language}\nTime zone: {tz}\nAI for text: {ai}\n"
@@ -430,7 +404,7 @@ TEXTS: dict[str, str] = {
     "rem.kind.meals": "Log food",
     "rem.kind.custom": "Custom",
     "rem.text_ask": "Reminder text (up to 200 characters).",
-    "rem.time_ask": "At what time? E.g. 08:30 (your time zone).",
+    "rem.time_ask": "When should I remind you? Pick a time or type yours, e.g. 08:30.",
     "rem.days_ask": "On which days?",
     "rem.daily": "Every day",
     "rem.weekdays": "Weekdays",
@@ -440,19 +414,19 @@ TEXTS: dict[str, str] = {
     "rem.turn_off": "🔕 Turn off",
     "rem.snoozed": "I'll remind you in 30 minutes.",
     "rem.disabled": "Reminder turned off.",
-    "rem.quiet_ask": "Quiet hours — no reminders arrive then. Send a range, e.g. “22:00-08:00”.",
+    "rem.quiet_ask": "Quiet hours — no reminders then. Pick one or type yours, e.g. 22:00-08:00.",
     "rem.quiet_off": "Turn off quiet hours",
     "rem.msg.weigh_in": "Time to weigh in. Log it in “📅 My day” → “⚖️ Weight”.",
     "rem.msg.workout": "A workout is planned for today. Mark it when you're done.",
     "rem.msg.meals": "Don't forget to log your food — a few words or a photo is enough.",
     # hints
-    "hint.decimal": "A number; comma or dot.",
-    "hint.integer": "A whole number.",
+    "hint.decimal": "Type a number, e.g. 12.5.",
+    "hint.integer": "Tap a button or type a number.",
     "hint.boolean": "Yes or no.",
     "hint.text": "Short text.",
     "hint.selection": "Choose an option.",
-    "hint.duration_hmm": "Minutes (45), h:mm (1:30) or “1h 20min”.",
-    "hint.duration_mmss": "mm:ss (1:30 = 90 s) or “90 sec”.",
+    "hint.duration_hmm": "How long? Tap a button or type minutes, e.g. 50 (or 1:30 for an hour and a half).",
+    "hint.duration_mmss": "Minutes and seconds, e.g. 1:30 (a minute and a half).",
     "hint.target": "Planned: {value}",
     # errors
     "err.generic": "Something went wrong and nothing was saved. Please try again.",
@@ -535,4 +509,27 @@ TEXTS: dict[str, str] = {
     "ai.provider_auth": "AI is misconfigured (key). Tell the administrator; log manually for now.",
     "ai.model_unavailable": "The configured AI model is unavailable. Please log manually.",
     "ai.invalid_output": "AI returned an invalid answer. Try again or log manually.",
+    "word.effort": "effort",
+    "word.reserve": "left in tank",
+    "btn.skip_rest": "⏭ Skip the rest",
+    "weight.ask_quick": "Your weight? Last time it was {kg} kg — tap a button or type a number, e.g. 72.4.",
+    "food.one_serving": "1 serving",
+    "food.two_servings": "2 servings",
+    "profile.kcal_saved": "🎯 Target: {kcal} kcal a day.",
+    "tz.kaliningrad": "Kaliningrad",
+    "tz.moscow": "Moscow",
+    "tz.samara": "Samara",
+    "tz.yekaterinburg": "Yekaterinburg",
+    "tz.omsk": "Omsk",
+    "tz.novosibirsk": "Novosibirsk",
+    "tz.krasnoyarsk": "Krasnoyarsk",
+    "tz.irkutsk": "Irkutsk",
+    "tz.vladivostok": "Vladivostok",
+    "tz.minsk": "Minsk",
+    "tz.kyiv": "Kyiv",
+    "tz.almaty": "Almaty",
+    "tz.tashkent": "Tashkent",
+    "tz.tbilisi": "Tbilisi",
+    "tz.berlin": "Berlin",
+    "tz.london": "London",
 }

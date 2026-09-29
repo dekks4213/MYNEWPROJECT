@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fitcoach.ai.gateway import AIGateway
-from fitcoach.bot.ui import COMMON_TIMEZONES, Ob, column, inline, main_menu
+from fitcoach.bot.ui import KCAL_PRESETS, TIMEZONES, Ob, column, inline, main_menu
 from fitcoach.db.models import User
 from fitcoach.i18n import Translator
 from fitcoach.services.reminders import ReminderService
@@ -54,7 +54,7 @@ def step_view(tr: Translator, step: str, mode: str, gateway: AIGateway):  # type
             [(tr("ob.ai_deny"), Ob(mode=mode, action="ai", value="no"))],
         )
     if step == "timezone":
-        buttons = [(z, Ob(mode=mode, action="tz", value=z)) for z in COMMON_TIMEZONES]
+        buttons = [(tr(key), Ob(mode=mode, action="tz", value=zone)) for zone, key in TIMEZONES]
         return tr("ob.timezone"), column(buttons, width=2)
     if step == "units":
         return tr("ob.units"), inline(
@@ -65,8 +65,11 @@ def step_view(tr: Translator, step: str, mode: str, gateway: AIGateway):  # type
         buttons.append((tr("btn.skip"), Ob(mode=mode, action="goal", value="")))
         return tr("ob.goal"), column(buttons)
     if step == "target":
+        presets = [(k, Ob(mode=mode, action="target", value=k)) for k in KCAL_PRESETS]
         return tr("ob.target"), inline(
-            [(tr("ob.target_skip"), Ob(mode=mode, action="target", value=""))]
+            presets[:3],
+            presets[3:],
+            [(tr("ob.target_skip"), Ob(mode=mode, action="target", value=""))],
         )
     raise ValueError(step)
 
@@ -128,7 +131,7 @@ async def on_choice(
     elif action == "goal":
         await svc.set_goal(value or None)
     elif action == "target":
-        await svc.set_kcal_target(None)
+        await svc.set_kcal_target(value if value in KCAL_PRESETS else None)
     elif action == "open" and not onboarding:
         await _open_setting(query, value, tr, gateway, state)
         return

@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fitcoach.bot.handlers.common import msg
-from fitcoach.bot.ui import Fd, Ob, St, inline, main_menu, num
+from fitcoach.bot.ui import KCAL_PRESETS, Fd, Ob, St, inline, main_menu, num
 from fitcoach.db.models import User
 from fitcoach.i18n import Translator, all_labels
 from fitcoach.services.diary import DiaryService
@@ -67,9 +67,32 @@ async def targets_start(query: CallbackQuery, tr: Translator, state: FSMContext)
     await msg(query).answer(
         tr("profile.targets_ask"),
         reply_markup=inline(
+            [(k, St(a="kcal", x=k)) for k in KCAL_PRESETS[:3]],
+            [(k, St(a="kcal", x=k)) for k in KCAL_PRESETS[3:]],
             [(tr("profile.targets_clear"), St(a="targets_clear"))],
             [(tr("btn.cancel"), Fd(action="cancel"))],
         ),
+    )
+
+
+@router.callback_query(St.filter(F.a == "kcal"))
+async def kcal_preset(
+    query: CallbackQuery,
+    callback_data: St,
+    session: AsyncSession,
+    user: User,
+    tr: Translator,
+    state: FSMContext,
+) -> None:
+    if callback_data.x not in KCAL_PRESETS:
+        await query.answer(tr("stale_button"))
+        return
+    await UserService(session, user).set_kcal_target(callback_data.x)
+    await session.commit()
+    await state.clear()
+    await query.answer(tr("settings.saved"))
+    await msg(query).answer(
+        tr("profile.kcal_saved", kcal=callback_data.x), reply_markup=main_menu(tr)
     )
 
 

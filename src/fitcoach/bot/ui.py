@@ -66,6 +66,7 @@ class Fr(CallbackData, prefix="fr"):
     d: int
     v: int
     i: int = 0
+    x: str = ""
 
 
 class Fm(CallbackData, prefix="fm"):
@@ -105,16 +106,30 @@ MENU_KEYS = (
     "menu.profile",
     "menu.settings",
 )
-COMMON_TIMEZONES = (
-    "Europe/Kaliningrad",
-    "Europe/Moscow",
-    "Europe/Samara",
-    "Asia/Yekaterinburg",
-    "Asia/Novosibirsk",
-    "Asia/Vladivostok",
-    "Europe/Berlin",
-    "UTC",
+# (IANA zone, i18n label key). Users pick a city; the IANA name is stored.
+TIMEZONES = (
+    ("Europe/Kaliningrad", "tz.kaliningrad"),
+    ("Europe/Moscow", "tz.moscow"),
+    ("Europe/Samara", "tz.samara"),
+    ("Asia/Yekaterinburg", "tz.yekaterinburg"),
+    ("Asia/Omsk", "tz.omsk"),
+    ("Asia/Novosibirsk", "tz.novosibirsk"),
+    ("Asia/Krasnoyarsk", "tz.krasnoyarsk"),
+    ("Asia/Irkutsk", "tz.irkutsk"),
+    ("Asia/Vladivostok", "tz.vladivostok"),
+    ("Europe/Minsk", "tz.minsk"),
+    ("Europe/Kyiv", "tz.kyiv"),
+    ("Asia/Almaty", "tz.almaty"),
+    ("Asia/Tashkent", "tz.tashkent"),
+    ("Asia/Tbilisi", "tz.tbilisi"),
+    ("Europe/Berlin", "tz.berlin"),
+    ("Europe/London", "tz.london"),
 )
+KCAL_PRESETS = ("1500", "1800", "2000", "2200", "2500", "3000")
+DURATION_PRESETS_MIN = (15, 30, 45, 60, 90, 120)
+REMINDER_TIMES = ("07:00", "08:00", "09:00", "12:00", "18:00", "20:00", "21:00", "22:00")
+QUIET_PRESETS = ("22:00-07:00", "23:00-08:00", "00:00-09:00")
+GRAM_PRESETS = ("50", "100", "150", "200", "250", "300")
 MEAL_ORDER = ("breakfast", "lunch", "dinner", "snack")
 
 
@@ -184,7 +199,13 @@ def _nutrient(tr: Translator, total: NutrientTotal, target: Decimal | None, unit
 
 def words(tr: Translator) -> SetWords:
     return SetWords(
-        tr("unit.m"), tr("unit.sec"), tr("unit.min"), tr("word.rest"), tr("word.warmup_short")
+        tr("unit.m"),
+        tr("unit.sec"),
+        tr("unit.min"),
+        tr("word.rest"),
+        tr("word.warmup_short"),
+        tr("word.effort"),
+        tr("word.reserve"),
     )
 
 
@@ -373,6 +394,17 @@ def format_food_draft(tr: Translator, state: FoodDraftState) -> str:
     return "\n".join(lines)
 
 
+def amount_kb(tr: Translator, draft_id: int, version: int, index: int) -> InlineKeyboardMarkup:
+    scale = [("½", "x0.5"), ("×1,5" if tr.language == "ru" else "×1.5", "x1.5"), ("×2", "x2")]
+    grams = [(f"{g} {tr('unit.g')}", f"g{g}") for g in GRAM_PRESETS]
+    return inline(
+        [(label, Fr(a="amt", d=draft_id, v=version, i=index, x=x)) for label, x in scale],
+        [(label, Fr(a="amt", d=draft_id, v=version, i=index, x=x)) for label, x in grams[:3]],
+        [(label, Fr(a="amt", d=draft_id, v=version, i=index, x=x)) for label, x in grams[3:]],
+        [(tr("btn.cancel"), Fd(action="cancel"))],
+    )
+
+
 def food_draft_kb(
     tr: Translator, draft_id: int, version: int, state: FoodDraftState
 ) -> InlineKeyboardMarkup:
@@ -428,6 +460,7 @@ def field_prompt(tr: Translator, field: FieldDefinition, target: Any | None) -> 
 
 
 def field_input_kb(tr: Translator, field: FieldDefinition) -> InlineKeyboardMarkup:
+    """Buttons for the common answers so people rarely have to type."""
     rows: list[list[tuple[str, CallbackData]]] = []
     if field.type is FieldType.SELECTION and field.choices:
         rows.extend([(c, Fd(action="choice", value=str(i)))] for i, c in enumerate(field.choices))
@@ -438,9 +471,29 @@ def field_input_kb(tr: Translator, field: FieldDefinition) -> InlineKeyboardMark
                 (tr("word.no"), Fd(action="bool", value="0")),
             ]
         )
-    buttons = [(tr("btn.skip"), Fd(action="skip"))] if not field.required else []
-    rows.append([*buttons, (tr("btn.cancel"), Fd(action="cancel"))])
-    return inline(*rows)
+    if field.type is FieldType.DURATION and field.duration_format == "h:mm":
+        presets: list[tuple[str, CallbackData]] = [
+            (tr("fmt.minutes", n=m), Fd(action="val", value=str(m))) for m in DURATION_PRESETS_MIN
+        ]
+        rows.extend([presets[:3], presets[3:]])
+    if (
+        field.type is FieldType.INTEGER
+        and field.min_value is not None
+        and field.max_value is not None
+        and field.max_value - field.min_value <= 10
+    ):
+        numbers: list[tuple[str, CallbackData]] = [
+            (str(n), Fd(action="val", value=str(n)))
+            for n in range(int(field.min_value), int(field.max_value) + 1)
+        ]
+        rows.extend([numbers[:5], numbers[5:]] if len(numbers) > 5 else [numbers])
+    last: list[tuple[str, CallbackData]] = []
+    if not field.required:
+        last.append((tr("btn.skip"), Fd(action="skip")))
+    last.append((tr("btn.skip_rest"), Fd(action="skip_rest")))
+    rows.append(last)
+    rows.append([(tr("btn.cancel"), Fd(action="cancel"))])
+    return inline(*[r for r in rows if r])
 
 
 def format_duration_min(tr: Translator, seconds: int | None) -> str:

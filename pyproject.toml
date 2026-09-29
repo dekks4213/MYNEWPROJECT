@@ -50,6 +50,7 @@ ignore = ["S101", "RUF001", "RUF002", "RUF003"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "ASYNC240"]
 "migrations/**" = ["E501"]
+"src/fitcoach/i18n/*.py" = ["E501"]  # user-facing text catalogs
 
 [tool.mypy]
 python_version = "3.12"

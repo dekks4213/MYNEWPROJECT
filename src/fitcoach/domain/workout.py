@@ -240,6 +240,8 @@ class SetWords:
     minutes: str
     rest: str
     warmup: str
+    effort: str = "RPE"
+    reserve: str = "RIR"
 
 
 def format_set(s: SetSpec, w: SetWords) -> str:
@@ -257,9 +259,9 @@ def format_set(s: SetSpec, w: SetWords) -> str:
     if s.stroke:
         parts.append(s.stroke)
     if s.rpe is not None:
-        parts.append(f"RPE {format(s.rpe.normalize(), 'f')}")
+        parts.append(f"{w.effort} {format(s.rpe.normalize(), 'f')}/10")
     if s.rir is not None:
-        parts.append(f"RIR {s.rir}")
+        parts.append(f"{w.reserve} {s.rir}")
     text = " ".join(parts) or "—"
     if s.warmup:
         text += f" ({w.warmup})"

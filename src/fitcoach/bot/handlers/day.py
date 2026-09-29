@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from aiogram import F, Router
@@ -69,17 +70,55 @@ async def my_day(
 # --- weight ------------------------------------------------------------------------------
 
 
-@router.message(Command("weight"))
-async def weight_cmd(message: Message, tr: Translator, state: FSMContext) -> None:
+async def _ask_weight(
+    message: Message, session: AsyncSession, user: User, tr: Translator, state: FSMContext
+) -> None:
     await state.set_state(WeightSG.value)
-    await message.answer(tr("weight.ask"), reply_markup=cancel_kb(tr))
+    last = await DiaryService(session, user).latest_weight()
+    if last is None:
+        await message.answer(tr("weight.ask"), reply_markup=cancel_kb(tr))
+        return
+    base = last.weight_kg
+    steps = (Decimal("-0.5"), Decimal("-0.2"), Decimal(0), Decimal("0.2"), Decimal("0.5"))
+    buttons = [(num(tr, base + d, 1), Fd(action="wq", value=str(base + d))) for d in steps]
+    await message.answer(
+        tr("weight.ask_quick", kg=num(tr, base, 1)),
+        reply_markup=inline(buttons, [(tr("btn.cancel"), Fd(action="cancel"))]),
+    )
+
+
+@router.message(Command("weight"))
+async def weight_cmd(
+    message: Message, session: AsyncSession, user: User, tr: Translator, state: FSMContext
+) -> None:
+    await _ask_weight(message, session, user, tr, state)
 
 
 @router.callback_query(Fd.filter(F.action == "weight"))
-async def weight_start(query: CallbackQuery, tr: Translator, state: FSMContext) -> None:
+async def weight_start(
+    query: CallbackQuery, session: AsyncSession, user: User, tr: Translator, state: FSMContext
+) -> None:
     await query.answer()
-    await state.set_state(WeightSG.value)
-    await msg(query).answer(tr("weight.ask"), reply_markup=cancel_kb(tr))
+    await _ask_weight(msg(query), session, user, tr, state)
+
+
+@router.callback_query(WeightSG.value, Fd.filter(F.action == "wq"))
+async def weight_quick(
+    query: CallbackQuery,
+    callback_data: Fd,
+    session: AsyncSession,
+    user: User,
+    tr: Translator,
+    state: FSMContext,
+) -> None:
+    entry = await DiaryService(session, user).add_weight(callback_data.value[:8])
+    await session.commit()
+    await state.clear()
+    await query.answer(tr("saved"))
+    await msg(query).answer(
+        tr("weight.saved", kg=num(tr, entry.weight_kg, 2)),
+        reply_markup=inline([(tr("btn.undo"), En(action="del", kind="weight", id=entry.id))]),
+    )
 
 
 @router.message(WeightSG.value, F.text)

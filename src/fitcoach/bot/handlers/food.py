@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fitcoach.ai.gateway import AIGateway
 from fitcoach.bot.handlers.common import msg
 from fitcoach.bot.ui import (
+    GRAM_PRESETS,
     MEAL_ORDER,
     Fd,
     Fm,
     Fr,
     St,
+    amount_kb,
     cancel_kb,
     column,
     food_draft_kb,
@@ -300,6 +302,22 @@ async def draft_action(
         await query.answer()
         await show_draft(message, svc, draft, tr)
         return
+    if cb.a == "amt":
+        if cb.x.startswith("g") and cb.x[1:].isdigit():
+            draft = await svc.edit_item(cb.d, cb.v, cb.i, f"{cb.x[1:]} г")
+        elif cb.x.startswith("x"):
+            try:
+                factor = parse_decimal(cb.x[1:])
+            except ParseError as exc:
+                raise ServiceError("bad_amount") from exc
+            draft = await svc.scale_item(cb.d, cb.v, cb.i, factor)
+        else:
+            raise ServiceError("bad_amount")
+        await session.commit()
+        await state.clear()
+        await query.answer()
+        await show_draft(message, svc, draft, tr)
+        return
     if cb.a == "meal":
         _, current = await svc.get_draft(cb.d)
         nxt = MEAL_ORDER[(MEAL_ORDER.index(current.meal_type.value) + 1) % len(MEAL_ORDER)]
@@ -309,12 +327,20 @@ async def draft_action(
         await show_draft(message, svc, draft, tr)
         return
     # Actions that need a text reply keep the draft id+version in FSM data.
-    await svc.get_draft(cb.d)  # ownership check before asking anything
+    _, current_state = await svc.get_draft(cb.d)  # ownership check before asking anything
     await query.answer()
     await state.update_data(draft_id=cb.d, version=cb.v, index=cb.i)
     if cb.a == "edit":
         await state.set_state(FoodSG.edit)
-        await message.answer(tr("draft.edit_ask", n=cb.i + 1), reply_markup=cancel_kb(tr))
+        await message.answer(
+            tr(
+                "draft.edit_ask",
+                n=current_state.items[cb.i].name
+                if 0 <= cb.i < len(current_state.items)
+                else cb.i + 1,
+            ),
+            reply_markup=amount_kb(tr, cb.d, cb.v, cb.i),
+        )
     elif cb.a == "add":
         await state.set_state(FoodSG.add)
         await message.answer(tr("draft.add_ask"), reply_markup=cancel_kb(tr))
@@ -432,9 +458,42 @@ async def favorite_pick(
     await state.set_state(FoodSG.fav_amount)
     await state.update_data(food_id=food.id)
     hint = tr("food.serving_hint", g=num(tr, food.serving_g)) if food.serving_g else ""
+    presets = [
+        (f"{g} {tr('unit.g')}", Fm(a="favamt", id=food.id, x=f"{g} г")) for g in GRAM_PRESETS
+    ]
+    rows: list[list[tuple[str, Any]]] = [presets[:3], presets[3:]]
+    if food.serving_g:
+        rows.insert(
+            0,
+            [
+                (tr("food.one_serving"), Fm(a="favamt", id=food.id, x="1 порция")),
+                (tr("food.two_servings"), Fm(a="favamt", id=food.id, x="2 порции")),
+            ],
+        )
+    rows.append([(tr("btn.cancel"), Fd(action="cancel"))])
     await msg(query).answer(
-        tr("food.amount_ask", name=food.name) + hint, reply_markup=cancel_kb(tr)
+        tr("food.amount_ask", name=food.name) + hint, reply_markup=inline(*rows)
     )
+
+
+@router.callback_query(Fm.filter(F.a == "favamt"))
+async def favorite_amount_button(
+    query: CallbackQuery,
+    callback_data: Fm,
+    session: AsyncSession,
+    user: User,
+    tr: Translator,
+    gateway: AIGateway,
+    settings: Settings,
+    food_sources: list[FoodSource],
+    state: FSMContext,
+) -> None:
+    svc = service(session, user, gateway, settings, food_sources)
+    draft = await svc.draft_from_catalog(callback_data.id, callback_data.x[:20])
+    await session.commit()
+    await state.clear()
+    await query.answer()
+    await show_draft(msg(query), svc, draft, tr)
 
 
 @router.message(FoodSG.fav_amount, F.text)
@@ -703,17 +762,17 @@ async def copy_menu(query: CallbackQuery, tr: Translator) -> None:
     for day_key, offset in (("day.yesterday", "1"), ("day.today_short", "0")):
         rows.append(
             [
-                (f"{tr(day_key)}: {tr('meal.' + m)}", Fm(a="cp", x=f"{offset}:{m}"))
+                (f"{tr(day_key)}: {tr('meal.' + m)}", Fm(a="cp", x=f"{offset}-{m}"))
                 for m in MEAL_ORDER[:2]
             ]
         )
         rows.append(
             [
-                (f"{tr(day_key)}: {tr('meal.' + m)}", Fm(a="cp", x=f"{offset}:{m}"))
+                (f"{tr(day_key)}: {tr('meal.' + m)}", Fm(a="cp", x=f"{offset}-{m}"))
                 for m in MEAL_ORDER[2:]
             ]
         )
-    rows.append([(tr("food.copy_all_yesterday"), Fm(a="cp", x="1:"))])
+    rows.append([(tr("food.copy_all_yesterday"), Fm(a="cp", x="1-"))])
     await msg(query).answer(tr("food.copy_ask"), reply_markup=inline(*rows))
 
 
@@ -728,7 +787,7 @@ async def copy_pick(
     settings: Settings,
     food_sources: list[FoodSource],
 ) -> None:
-    offset_text, _, meal = callback_data.x.partition(":")
+    offset_text, _, meal = callback_data.x.partition("-")
     if offset_text not in ("0", "1") or (meal and meal not in MEAL_ORDER):
         raise ServiceError("bad_choice")
     day = local_today(user) - dt.timedelta(days=int(offset_text))

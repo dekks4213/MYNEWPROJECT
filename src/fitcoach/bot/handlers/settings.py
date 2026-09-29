@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -11,11 +13,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fitcoach.bot.handlers.common import msg
 from fitcoach.bot.handlers.onboarding import SettingsSG
-from fitcoach.bot.ui import Fd, Ob, Rm, St, cancel_kb, column, inline, main_menu
+from fitcoach.bot.ui import (
+    QUIET_PRESETS,
+    REMINDER_TIMES,
+    Fd,
+    Ob,
+    Rm,
+    St,
+    cancel_kb,
+    column,
+    inline,
+    main_menu,
+)
 from fitcoach.db.models import User
-from fitcoach.domain.schedule import ALL_DAYS, WEEKDAYS
+from fitcoach.domain.schedule import ALL_DAYS, WEEKDAYS, parse_hhmm
 from fitcoach.i18n import Translator, all_labels
 from fitcoach.services.account import delete_account, export_json
+from fitcoach.services.errors import ServiceError
 from fitcoach.services.reminders import KINDS, ReminderService
 from fitcoach.services.users import UserService
 
@@ -162,7 +176,7 @@ async def reminder_kind(
         await msg(query).answer(tr("rem.text_ask"), reply_markup=cancel_kb(tr))
         return
     await state.set_state(ReminderSG.time)
-    await msg(query).answer(tr("rem.time_ask"), reply_markup=cancel_kb(tr))
+    await msg(query).answer(tr("rem.time_ask"), reply_markup=_time_kb(tr))
 
 
 @router.message(ReminderSG.text, F.text)
@@ -170,20 +184,21 @@ async def reminder_text(message: Message, tr: Translator, state: FSMContext) -> 
     assert message.text is not None
     await state.update_data(rem_text=message.text[:200])
     await state.set_state(ReminderSG.time)
-    await message.answer(tr("rem.time_ask"), reply_markup=cancel_kb(tr))
+    await message.answer(tr("rem.time_ask"), reply_markup=_time_kb(tr))
 
 
-@router.message(ReminderSG.time, F.text)
-async def reminder_time(message: Message, tr: Translator, state: FSMContext) -> None:
-    assert message.text is not None
-    from fitcoach.domain.schedule import parse_hhmm
-    from fitcoach.services.errors import ServiceError
+def _time_kb(tr: Translator) -> Any:
+    # ":" is the callback-data separator, so times travel as "0800".
+    buttons = [(t, St(a="rem_time", x=t.replace(":", ""))) for t in REMINDER_TIMES]
+    return inline(buttons[:4], buttons[4:], [(tr("btn.cancel"), Fd(action="cancel"))])
 
+
+async def _reminder_time(message: Message, tr: Translator, state: FSMContext, text: str) -> None:
     try:
-        parse_hhmm(message.text)
+        parse_hhmm(text)
     except ValueError as exc:
         raise ServiceError("bad_time") from exc
-    await state.update_data(rem_time=message.text.strip())
+    await state.update_data(rem_time=text.strip())
     await message.answer(
         tr("rem.days_ask"),
         reply_markup=inline(
@@ -194,6 +209,21 @@ async def reminder_time(message: Message, tr: Translator, state: FSMContext) -> 
             [(tr("btn.cancel"), Fd(action="cancel"))],
         ),
     )
+
+
+@router.message(ReminderSG.time, F.text)
+async def reminder_time(message: Message, tr: Translator, state: FSMContext) -> None:
+    assert message.text is not None
+    await _reminder_time(message, tr, state, message.text)
+
+
+@router.callback_query(ReminderSG.time, St.filter(F.a == "rem_time"))
+async def reminder_time_button(
+    query: CallbackQuery, callback_data: St, tr: Translator, state: FSMContext
+) -> None:
+    await query.answer()
+    x = callback_data.x
+    await _reminder_time(msg(query), tr, state, f"{x[:2]}:{x[2:]}" if len(x) == 4 else x)
 
 
 @router.callback_query(St.filter(F.a == "rem_days"))
@@ -256,7 +286,12 @@ async def quiet_start(query: CallbackQuery, tr: Translator, state: FSMContext) -
     await msg(query).answer(
         tr("rem.quiet_ask"),
         reply_markup=inline(
-            [(tr("rem.quiet_off"), St(a="quiet_off"))], [(tr("btn.cancel"), Fd(action="cancel"))]
+            [
+                (p.replace("-", "–"), St(a="quiet_set", x=str(i)))
+                for i, p in enumerate(QUIET_PRESETS)
+            ],
+            [(tr("rem.quiet_off"), St(a="quiet_off"))],
+            [(tr("btn.cancel"), Fd(action="cancel"))],
         ),
     )
 
@@ -267,14 +302,31 @@ async def quiet_value(
 ) -> None:
     assert message.text is not None
     start, _, end = message.text.replace("—", "-").replace("–", "-").partition("-")
-    from fitcoach.services.errors import ServiceError
-
     if not end.strip():
         raise ServiceError("bad_time")
     await ReminderService(session, user).set_quiet_hours(start.strip(), end.strip())
     await session.commit()
     await state.clear()
     await message.answer(tr("settings.saved"), reply_markup=main_menu(tr))
+
+
+@router.callback_query(St.filter(F.a == "quiet_set"))
+async def quiet_preset(
+    query: CallbackQuery,
+    callback_data: St,
+    session: AsyncSession,
+    user: User,
+    tr: Translator,
+    state: FSMContext,
+) -> None:
+    if not callback_data.x.isdigit() or int(callback_data.x) >= len(QUIET_PRESETS):
+        raise ServiceError("bad_time")
+    start, _, end = QUIET_PRESETS[int(callback_data.x)].partition("-")
+    await ReminderService(session, user).set_quiet_hours(start, end)
+    await session.commit()
+    await state.clear()
+    await query.answer(tr("settings.saved"))
+    await msg(query).answer(tr("settings.saved"), reply_markup=main_menu(tr))
 
 
 @router.callback_query(St.filter(F.a == "quiet_off"))

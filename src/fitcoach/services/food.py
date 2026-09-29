@@ -631,6 +631,33 @@ class FoodService:
         state.items[index] = compute(item)
         return await self._save_state(row, version, state)
 
+    async def scale_item(self, draft_id: int, version: int, index: int, factor: Decimal) -> Draft:
+        """ "½", "×2" buttons: scale the stated amount (or known grams / fixed totals)."""
+        if not Decimal("0.1") <= factor <= Decimal(10):
+            raise ServiceError("bad_amount")
+        row, state = await self._editable(draft_id, version)
+        if not 0 <= index < len(state.items):
+            raise NotFound
+        item = state.items[index]
+
+        def mul(v: Decimal | None) -> Decimal | None:
+            return None if v is None else (v * factor).quantize(Decimal("0.01"))
+
+        if item.amount is not None and item.unit is not None:
+            update: dict[str, object] = {
+                "amount": mul(item.amount),
+                "grams_estimate": mul(item.grams_estimate),
+            }
+        elif item.grams is not None:
+            update = {"amount": mul(item.grams), "unit": Unit.G, "grams_estimate": None}
+        else:
+            raise ServiceError("bad_amount")
+        if item.per is None and item.fixed is not None:
+            update["fixed"] = FixedTotals(**{k: mul(v) for k, v in item.fixed.model_dump().items()})
+        update["amount_text"] = None
+        state.items[index] = compute(item.model_copy(update=update))
+        return await self._save_state(row, version, state)
+
     async def remove_item(self, draft_id: int, version: int, index: int) -> Draft:
         row, state = await self._editable(draft_id, version)
         if not 0 <= index < len(state.items):
