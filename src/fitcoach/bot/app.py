@@ -7,17 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fitcoach.ai.gateway import AIGateway
 from fitcoach.bot.handlers import (
-    common,
     day,
     food,
+    guess,
     history,
+    home,
     onboarding,
     profile,
     settings,
     training,
 )
 from fitcoach.bot.middleware import UnitOfWorkMiddleware
-from fitcoach.bot.ui import main_menu
+from fitcoach.bot.screen import answer
+from fitcoach.bot.ui import inline, nav
 from fitcoach.config import Settings
 from fitcoach.i18n import Translator
 from fitcoach.services.food_sources import FoodSource, build_sources
@@ -27,29 +29,32 @@ fallback = Router(name="fallback")
 
 @fallback.message(F.text)
 async def unknown_text(message: Message, tr: Translator) -> None:
-    await message.answer(tr("unknown"), reply_markup=main_menu(tr))
+    """Unknown commands, or text where the current step expects a button or a file.
+    A hint only: the current screen keeps its buttons."""
+    await message.answer(tr("unknown"), reply_markup=inline(nav(tr, cancel=True)))
 
 
 @fallback.message()
 async def unsupported(message: Message, tr: Translator) -> None:
-    await message.answer(tr("unsupported_media"), reply_markup=main_menu(tr))
+    await message.answer(tr("unsupported_media"), reply_markup=inline(nav(tr)))
 
 
 @fallback.callback_query()
 async def stale_callback(query: CallbackQuery, tr: Translator) -> None:
     """Buttons from finished flows (e.g. a second tap on Save) do nothing."""
-    await query.answer(tr("stale_button"))
+    await answer(query, tr("stale_button"))
 
 
 ROUTERS = (
     onboarding.router,
-    common.router,
+    home.router,
     day.router,
     food.router,
     training.router,
     history.router,
     profile.router,
     settings.router,
+    guess.router,
     fallback,
 )
 

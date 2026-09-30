@@ -75,32 +75,14 @@ def starter_fields(kind: ActivityKind, t: Label) -> tuple[str, list[FieldDefinit
             FieldDefinition(key="f4", label=t("starter.f.equipment"), type=FieldType.TEXT),
         ]
     if kind is ActivityKind.ENDURO:
+        # Five things riders actually note; anything else can be added as a custom activity.
         return t("starter.enduro"), [
-            FieldDefinition(
-                key="f1",
-                label=t("starter.f.subtype"),
-                type=FieldType.SELECTION,
-                choices=(t("starter.c.enduro"), t("starter.c.motocross"), t("starter.c.other")),
-            ),
-            _duration(t("starter.f.elapsed")),
-            FieldDefinition(
-                key="f2",
-                label=t("starter.f.riding_time"),
-                type=FieldType.DURATION,
-                duration_format="h:mm",
-                aggregation=Aggregation.SUM,
-            ),
+            _duration(t("starter.f.riding_time")),
             FieldDefinition(
                 key="f3",
                 label=t("starter.f.distance"),
                 type=FieldType.DECIMAL,
                 unit=t("unit.km"),
-                aggregation=Aggregation.SUM,
-            ),
-            FieldDefinition(
-                key="f4",
-                label=t("starter.f.laps"),
-                type=FieldType.INTEGER,
                 aggregation=Aggregation.SUM,
             ),
             FieldDefinition(
@@ -117,8 +99,7 @@ def starter_fields(kind: ActivityKind, t: Label) -> tuple[str, list[FieldDefinit
                 ),
             ),
             _scale_1_10("f6", t("starter.f.effort")),
-            _scale_1_10("f7", t("starter.f.fatigue")),
-            FieldDefinition(key="f8", label=t("starter.f.drills"), type=FieldType.TEXT),
+            FieldDefinition(key="f8", label=t("starter.f.note"), type=FieldType.TEXT),
         ]
     if kind is ActivityKind.MOTO_RIDE:
         return t("starter.moto_ride"), [

@@ -15,7 +15,10 @@ from fitcoach.domain.units import ParseError, parse_decimal
 from fitcoach.services.errors import ServiceError
 
 MACRO_TARGET_MAX = Decimal(1000)
-ONBOARDING_STEPS = ("language", "age", "privacy", "timezone", "units", "goal", "target", "done")
+# Short, progressive onboarding. AI consent and everything else is asked on first use.
+ONBOARDING_STEPS = ("language", "age", "goal", "timezone", "target", "done")
+# Steps of the previous, longer onboarding: users paused there continue at "goal".
+LEGACY_STEPS = {"privacy": "goal", "units": "goal"}
 LANGUAGES = ("ru", "en")
 GOALS = ("maintain", "lose", "gain", "habits")
 UNITS = ("metric",)  # imperial is planned, not implemented
@@ -56,7 +59,7 @@ class UserService:
         self.user = user
 
     def _advance(self, step: str) -> None:
-        if self.user.onboarding_step == step:
+        if step in ONBOARDING_STEPS and self.user.onboarding_step == step:
             self.user.onboarding_step = ONBOARDING_STEPS[ONBOARDING_STEPS.index(step) + 1]
 
     async def _flush(self) -> User:
@@ -89,11 +92,24 @@ class UserService:
         except ZoneInfoNotFoundError as exc:  # pragma: no cover - guarded above
             raise ServiceError("bad_timezone") from exc
         self.user.timezone = name
-        self._advance("timezone")
-        if self.user.onboarding_step == "units" and len(UNITS) == 1:
+        if self.user.units is None and len(UNITS) == 1:
             # Only metric is supported: don't ask a question with a single answer.
             self.user.units = UNITS[0]
-            self._advance("units")
+        self._advance("timezone")
+        return await self._flush()
+
+    async def normalize_onboarding(self) -> User:
+        step = LEGACY_STEPS.get(self.user.onboarding_step)
+        if step is not None:
+            self.user.onboarding_step = step
+            if self.user.units is None:
+                self.user.units = UNITS[0]
+        return await self._flush()
+
+    async def reset_onboarding(self) -> User:
+        """Run setup again (goal, time zone, calorie target). No records are deleted."""
+        if self.user.onboarding_step == "done":
+            self.user.onboarding_step = "goal"
         return await self._flush()
 
     async def set_units(self, units: str) -> User:

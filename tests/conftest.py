@@ -125,10 +125,8 @@ async def make_user(
         svc = UserService(session, user)
         await svc.set_language(language)
         await svc.confirm_adult()
-        await svc.set_ai_consent(False)
-        await svc.set_timezone(tz)
-        await svc.set_units("metric")
         await svc.set_goal("habits")
+        await svc.set_timezone(tz)
         await svc.set_kcal_target(None)
         await session.commit()
     return tid

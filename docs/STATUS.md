@@ -1,7 +1,32 @@
 # Status
 
-Last updated: 2026-09-29. Phase: **P1 substantially implemented; not complete** — live Telegram
-verification, Windows PowerShell scripts and external food databases are unverified (below).
+Last updated: 2026-09-30. Phase: **P1 implemented; Telegram UX redesigned** — Windows PowerShell
+scripts and external food databases are unverified (below).
+
+## UX redesign (2026-09-30)
+
+No new product features and no backend redesign. Changed: every bot screen, keyboards,
+texts (ru/en), FSM flows and the E2E harness. Service additions only where the UI needed them:
+`UserService.reset_onboarding/normalize_onboarding`, `ActivityService.last_sets`, idempotent
+`ActivityService.plan`, `build_day_summary(day=…)`, domain `compare_sets`/`format_sets`, a shorter
+onboarding order (`language, age, goal, timezone, target, done`) and a five-field enduro starter.
+
+- One message = one screen (`bot/screen.py`), nav row on every screen, /cancel everywhere.
+- Home card (name from Telegram, today's kcal/protein, workout, weight, CTAs instead of zeros);
+  "📊 Мой день" with day paging; quick-access keyboard 🍽 Еда · 🏋️ Тренировка · 📊 Мой день · 🏠 Главное
+  (old keyboard labels still work).
+- Weight: last value + ±0.2/0.5 steps → confirm screen with the change → saved screen with undo.
+- Food: "🍽 Как запишем?", preview "🍳 Завтрак / Овсянка — 100 г / ≈ 520 ккал / Б · Ж · У",
+  one clarification, edit screen per item, "🕘 Недавнее" with "🍳 Вчерашний завтрак".
+- Training: today's workout with ▶️ Начать; creation "Зал / Плавание / Эндуро / Другое / ✨ Описать
+  словами"; one exercise per screen with plan, last time, "✓ 3 × 10 · 60 кг", progress note;
+  timer-based duration button; effort as Легко/Нормально/Тяжело/Очень тяжело; custom builder
+  "Что хотите отслеживать?" (types hidden).
+- Reminders "Утром · 08:00 / Днём · 13:00 / Вечером · 19:00 / 🕐 Выбрать время"; "🌙 Не беспокоить".
+- Settings: Профиль · Цели · Напоминания · Язык и регион · ИИ-функции · Данные · Помощь; "↺ Пройти
+  настройку заново" with confirmation (records kept).
+- Free text outside a flow → "Что записать?" (еда / тренировка / вес).
+- Friendly errors with a way out; stale buttons answer "Эта кнопка уже неактуальна".
 
 ## Implemented
 
@@ -15,7 +40,7 @@ P0 (kept, all P0 tests still pass):
 - manual mode without AI.
 
 P1:
-- **Branding**: РИТМ / RITM via config + i18n. Navigation: Мой день · Записать еду · Тренировки · История · Профиль · Настройки.
+- **Branding**: РИТМ / RITM via config + i18n. Navigation: see "UX redesign" above.
 - **AI provider**:
   - `disabled | mock | gemini`;
   - typed tasks `parse_food_text`, `analyze_food_image`, `parse_food_voice`, `parse_workout_text`, `build_activity_draft`;
@@ -60,6 +85,17 @@ P1:
   - unique `(owner_id, source_ref)`;
   - `app_due_reminders()` security-definer function.
 
+## Checks performed (2026-09-30, UX redesign)
+
+| Check | Result |
+|---|---|
+| `TEST_PG_ADMIN_URL=… uv run pytest -q` (PostgreSQL 16) | **167 passed, 1 skipped** (skipped: opt-in live Gemini) |
+| `make lint` (ruff, ruff format --check, mypy --strict, 57 files) | clean |
+| `tests/test_bot_e2e.py`: 21 journeys (onboarding, weight, manual food, repeat yesterday, strength + complete workout, swimming, custom activity, enduro, reminder, cancel halfway + restart, back navigation, RU without jargon, EN, reset onboarding, free text, AI consent/photo/voice, media without AI, isolation + forged callbacks, duplicate update, corrections, Strong import/export/delete) | pass; each asserts real texts and buttons |
+| Harness invariants on every request: callback data ≤ 64 bytes and unpackable; each press answered exactly once; only live buttons can be tapped; "one live screen" asserted in navigation journeys | pass |
+| `tests/test_ui.py`: worst-case packing of all 11 callback factories, time encoding, ru/en number and date formats, set formatting, progress comparison | pass |
+| `tests/test_i18n.py`: 636 keys identical in ru/en, required dynamic families, no orphan keys | pass |
+
 ## Checks performed (2026-09-29, this environment)
 
 | Check | Result |
@@ -90,7 +126,7 @@ Live Gemini results (key from `.env`, never printed):
 
 ## Mocked / not verified
 
-- **Telegram Bot API**: not reachable from this environment (proxy 403). All bot flows are verified with a recording fake session (9 end-to-end scenarios in tests/test_bot_e2e.py, including photo/voice/document downloads, plus webhook tests). Live Telegram is **not verified**.
+- **Telegram Bot API**: the P1 build was run live in polling mode from this environment (getMe and polling OK). The redesigned screens are verified with the recording session (21 journeys); a manual pass on a real phone is still needed for layout (button widths, emoji rendering).
 - **Voice via OGG/Opus** (Telegram's format): the validation path is tested, but the live Gemini call was verified with WAV only (no encoder here).
 - **Open Food Facts / USDA FDC**: hosts blocked here (403). The adapters are contract-tested with recorded response shapes and are **disabled by default** (`FOOD_SOURCES=`). USDA needs its own key.
 - **Strong CSV**: the parser follows the historically published export columns; not checked against a fresh export from the current app.
@@ -102,6 +138,9 @@ Live Gemini results (key from `.env`, never printed):
 
 - Draft item names follow the model's wording (flash-lite sometimes keeps the case: «риса»). Items cannot be renamed in the draft, only changed in amount/kcal or removed and re-added.
 - Template/type **editing** (new revisions) exists in services and tests but has no Telegram UI yet. You can create new templates, archive them and plan them.
+- The screen id and multi-step input live in memory: after a restart, typed input of an unfinished step is asked again ("Что записать?") and old step buttons answer "неактуальна"; drafts and records are unaffected.
+- The calorie target is chosen by the user (presets or a number); the app does not calculate a recommendation, so there is no "estimate" screen.
+- The first name in the greeting comes from Telegram and is not stored.
 - Structured block entry without a template is offered for strength and swimming types only.
 - Strong import: exercise names are kept as in Strong (no rename mapping UI); weight unit is taken from the file, otherwise assumed kg and shown in the preview.
 - Reminder days: every day or weekdays only (the service supports any mask).
@@ -125,4 +164,5 @@ Live Gemini results (key from `.env`, never printed):
    - export;
    - `docker compose restart bot`, then the data is still there.
 3. Run `scripts\backup.ps1` and `scripts\restore-check.ps1` once on the server.
-4. Next development: Telegram UI for editing templates and types (revisions), renaming draft items, a Postgres-backed FSM storage, and a verified OGG voice test on a real device.
+4. Manual UX pass on a phone: the 13 journeys from the redesign brief (see tests/test_bot_e2e.py for the expected texts).
+5. Next development: Telegram UI for editing templates and types (revisions), renaming draft items, a Postgres-backed FSM storage, and a verified OGG voice test on a real device.

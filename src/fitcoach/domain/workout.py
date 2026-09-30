@@ -140,6 +140,39 @@ def totals(body: WorkoutBody) -> BodyTotals:
     return BodyTotals(sets, working, reps, volume, distance, duration)
 
 
+@dataclass(frozen=True)
+class Progress:
+    """Change of one exercise against the previous time. `kind`: load | reps | same."""
+
+    kind: str
+    delta: Decimal
+
+
+def compare_sets(previous: tuple[SetSpec, ...], current: tuple[SetSpec, ...]) -> Progress | None:
+    """Compare working sets only. Returns None when the sets are not comparable or worse:
+    a worse day is not highlighted."""
+    prev = [s for s in previous if not s.warmup and s.reps is not None]
+    cur = [s for s in current if not s.warmup and s.reps is not None]
+    if not prev or not cur:
+        return None
+    prev_load = max((s.load_kg for s in prev if s.load_kg is not None), default=None)
+    cur_load = max((s.load_kg for s in cur if s.load_kg is not None), default=None)
+    if prev_load is not None and cur_load is not None and cur_load != prev_load:
+        return Progress("load", cur_load - prev_load) if cur_load > prev_load else None
+    prev_reps = sum(s.reps or 0 for s in prev)
+    cur_reps = sum(s.reps or 0 for s in cur)
+    if cur_reps > prev_reps:
+        return Progress("reps", Decimal(cur_reps - prev_reps))
+    if cur_reps == prev_reps:
+        return Progress("same", Decimal(0))
+    return None
+
+
+def format_sets(sets: tuple[SetSpec, ...], w: SetWords) -> str:
+    """Sets without the exercise name: '60×10, 60×10, 60×8'."""
+    return ", ".join(format_set(s, w) for s in sets) or "—"
+
+
 def pace_per_100m(total_seconds: int | None, distance_m: int | None) -> int | None:
     """Pace from total time and total distance (never an average of per-set paces)."""
     if not total_seconds or not distance_m:

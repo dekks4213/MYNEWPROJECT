@@ -32,7 +32,7 @@ from fitcoach.domain.fields import (
     parse_field_value,
 )
 from fitcoach.domain.units import ParseError
-from fitcoach.domain.workout import ActivityKind, WorkoutBody
+from fitcoach.domain.workout import ActivityKind, SetSpec, WorkoutBody
 from fitcoach.services.errors import Conflict, NotFound, ServiceError
 from fitcoach.services.users import local_today, utcnow
 
@@ -321,6 +321,9 @@ class ActivityService:
         template = await self.get_template(template_id)
         if template.archived_at is not None:
             raise NotFound
+        for p, v in await self.list_planned(day, day):
+            if v.template_id == template_id:
+                return p  # a repeated tap does not plan the same workout twice
         version = await self.current_template_version(template_id)
         planned = PlannedWorkout(
             owner_id=self.user.id, template_version_id=version.id, planned_date=day
@@ -593,6 +596,16 @@ class ActivityService:
             query = query.where(WorkoutSession.local_date >= since)
         query = query.order_by(WorkoutSession.completed_at.desc()).limit(limit)
         return list((await self.session.execute(query)).scalars())
+
+    async def last_sets(self, item_name: str, lookback: int = 30) -> tuple[SetSpec, ...] | None:
+        """Sets of the most recent session that contains an exercise with this name."""
+        wanted = item_name.strip().casefold()
+        for s in await self.list_sessions(limit=lookback):
+            for block in WorkoutBody.load(s.blocks or []).blocks:
+                for item in block.items:
+                    if item.name.casefold() == wanted and item.sets:
+                        return item.sets
+        return None
 
     async def type_of_version(self, version_id: int) -> ActivityType:
         tv = await self._type_version(version_id)

@@ -13,8 +13,10 @@ src/fitcoach/
                history, reminders, strong_import, account (export/delete), summary
   ai/          typed task contracts, gateway (consent, budgets, breaker, metering),
                providers: gemini, mock
-  bot/         aiogram adapter: middleware, handlers per section, ui (formatting),
-               scheduler (reminder loop)
+  bot/         aiogram adapter: middleware, screen (one message = one screen),
+               ui (callback factories, keyboards, screen texts), handlers per section
+               (onboarding, home, day, food, training, history, profile, settings,
+               guess), scheduler (reminder loop)
   api/         FastAPI: /healthz, Telegram webhook
   i18n/        ru (default) / en
   prompts/     versioned runtime prompts (*_v1.txt)
@@ -113,6 +115,33 @@ Strong CSV: comma or semicolon delimiters, known header aliases, unit columns or
 - Optional food databases receive only a food name/brand query.
 - Logs contain exception type + code location only (`logsafe.log_failure`), no message text or tokens.
 - Owner-only JSON export; account deletion cascades through every owner FK. Backups: see OPERATIONS.md.
+
+## Telegram UX layer
+
+- **Screens.** `bot/screen.render()` edits the message a button belongs to; after typed input it sends
+  the next screen and strips the buttons of the previous one, so one live screen exists at a time.
+  The live message id is kept in its own FSM bucket (`destiny="screen"`), which survives
+  `state.clear()`. Slow AI steps show a "⏳" screen that the result replaces (`progress`/`replace`).
+- **Answers.** `screen.answer()` answers a button press exactly once; handlers compose screens
+  (save → list) without double answers. The middleware turns `ServiceError`/`AIUnavailableError`
+  into a pop-up, or into a message with "✕ Отмена" when the press was already answered or the
+  input was typed. No exception text, ids or JSON reach the user.
+- **Navigation.** `Go(s, a)` is stateless navigation (screen code + short argument); every screen
+  ends with `ui.nav()` (← Назад to its logical parent, 🏠 Главное, or ✕ Отмена inside a flow).
+  Back targets are fixed per screen, not a history stack, so they work after a restart.
+- **Callback data.** Payloads carry only ids, short action codes, indexes and plain numbers;
+  never user text. Times travel as `0800`, weights as `101.6`, recent meals as `1-breakfast`.
+  `ui.CALLBACK_CLASSES` lists every factory; `tests/test_ui.py` packs worst-case values, and the
+  E2E harness checks every button the bot sends (≤ 64 bytes, unpacks with a known factory).
+- **Repeated taps.** Records are protected by draft versions (food, workout text) or by the FSM
+  step the button belongs to (weight, workout, template, reminder); planning the same workout for
+  the same day twice returns the existing plan.
+- **Free text outside a flow** (`handlers/guess.py`) is kept in FSM data and offered as food,
+  workout or (for a plausible number) weight; nothing is saved without a preview.
+- **Progressive onboarding.** Steps: language (from Telegram, switchable) + 18+ → goal → city
+  → calorie target. AI consent is asked on first use. "Пройти настройку заново" resets the step
+  to `goal` without touching records; users paused in the old steps (`privacy`, `units`) continue
+  at `goal`.
 
 ## Known assumptions
 

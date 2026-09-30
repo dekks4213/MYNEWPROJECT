@@ -35,15 +35,15 @@ class DaySummary:
 
 
 async def build_day_summary(
-    session: AsyncSession, user: User, now: dt.datetime | None = None
+    session: AsyncSession, user: User, now: dt.datetime | None = None, day: dt.date | None = None
 ) -> DaySummary:
-    day = local_today(user, now)
+    day = day or local_today(user, now)
     diary = DiaryService(session, user)
     food, weights, sessions = await diary.entries_for_day(day)
     totals = day_totals(
         NutrientValues(f.energy_kcal, f.protein_g, f.fat_g, f.carbs_g) for f in food
     )
-    planned = await ActivityService(session, user).list_planned(day, day + dt.timedelta(days=1))
+    planned = await ActivityService(session, user).list_planned(day, day)
     return DaySummary(
         day=day,
         food=food,

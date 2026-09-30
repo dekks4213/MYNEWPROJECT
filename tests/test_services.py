@@ -310,3 +310,38 @@ async def test_plan_rejects_past_dates(sessionmaker: async_sessionmaker[AsyncSes
             await svc.plan(template_id, local_today(user) - dt.timedelta(days=1))
         assert (await s.execute(select(PlannedWorkout))).scalars().all() == []
         await s.rollback()
+
+
+async def test_reset_onboarding_keeps_records_and_legacy_steps_continue(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    tid = await make_user(sessionmaker)
+    async with sessionmaker() as s:
+        user = await open_user(s, tid)
+        await DiaryService(s, user).add_weight("80")
+        await UserService(s, user).reset_onboarding()
+        assert user.onboarding_step == "goal" and user.timezone is not None
+        user.onboarding_step = "privacy"  # a user paused in the old, longer onboarding
+        await UserService(s, user).normalize_onboarding()
+        assert user.onboarding_step == "goal"
+        assert await DiaryService(s, user).latest_weight() is not None
+        await s.commit()
+
+
+async def test_last_sets_come_from_the_latest_session(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    from fitcoach.domain.workout import parse_plan_text
+
+    tid = await make_user(sessionmaker)
+    async with sessionmaker() as s:
+        user = await open_user(s, tid)
+        svc = ActivityService(s, user)
+        tv = await svc.create_type("Зал", [default_duration_field("Длительность")])
+        ctx = await svc.recording_context(type_id=tv.activity_type_id)
+        assert await svc.last_sets("Жим") is None
+        for text in ("Жим 60x8 60x8", "Жим 60x10 60x9"):
+            await svc.record_session(ctx, {}, blocks=parse_plan_text(text))
+        last = await svc.last_sets("жим")
+        assert last is not None and [x.reps for x in last] == [10, 9]
+        await s.commit()

@@ -19,6 +19,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fitcoach.ai.types import AIUnavailableError
+from fitcoach.bot.screen import answer, was_answered
+from fitcoach.bot.ui import inline, nav
 from fitcoach.i18n import Translator
 from fitcoach.logsafe import log_failure
 from fitcoach.services.errors import ServiceError
@@ -61,14 +63,14 @@ class UnitOfWorkMiddleware(BaseMiddleware):
             except (ServiceError, AIUnavailableError) as exc:
                 await session.rollback()
                 prefix = "ai" if isinstance(exc, AIUnavailableError) else "err"
-                await _notify(event, tr(f"{prefix}.{exc.code}"))
+                await _notify(event, tr, tr(f"{prefix}.{exc.code}"), retry=True)
                 # Keep the update marked so a retry doesn't repeat side effects.
                 await self._mark_after_rollback(tg_user.id, event.update_id)
                 return None
             except Exception as exc:
                 await session.rollback()
                 log_failure(log, "unhandled error in handler", exc)
-                await _notify(event, tr("err.generic"))
+                await _notify(event, tr, tr("err.generic"), retry=False)
                 return None
 
     async def _mark_after_rollback(self, telegram_id: int, update_id: int) -> None:
@@ -78,13 +80,20 @@ class UnitOfWorkMiddleware(BaseMiddleware):
             await session.commit()
 
 
-async def _notify(update: Update, text_out: str) -> None:
+async def _notify(update: Update, tr: Translator, text_out: str, *, retry: bool) -> None:
+    """Friendly error: a pop-up on a button, otherwise a message with a way out.
+    Never exception text, ids or JSON."""
+    kb = inline(nav(tr, cancel=True) if retry else nav(tr))
     try:
         if update.callback_query is not None:
             cq: CallbackQuery = update.callback_query
-            await cq.answer(text_out, show_alert=True)
+            if not was_answered(cq):
+                await answer(cq, text_out, show_alert=True)
+            elif isinstance(cq.message, Message):
+                await cq.message.answer(text_out, reply_markup=kb)
         elif update.message is not None:
             msg: Message = update.message
-            await msg.answer(text_out)
+            hint = "\n\n" + tr("err.retry_hint") if retry else ""
+            await msg.answer(text_out + hint, reply_markup=kb)
     except Exception:
         log.warning("failed to deliver error message")

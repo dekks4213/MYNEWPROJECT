@@ -55,4 +55,4 @@ def test_webhook_requires_secret_and_processes_valid_updates(database: dict[str,
         assert client.post(path, content=big, headers=headers).status_code == 413
         response = client.post(path, json=_update(880_000_001, uid), headers=headers)
         assert response.status_code == 200
-        assert any("Выберите язык" in getattr(r, "text", "") for r in session.requests)
+        assert any("Привет. Я РИТМ." in (getattr(r, "text", "") or "") for r in session.requests)
